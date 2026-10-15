@@ -2,6 +2,13 @@ package com.azeem.azremoteconnect
 
 import android.app.Activity
 import android.os.Bundle
+import android.content.pm.ActivityInfo
+import android.media.AudioTrack
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.content.res.Configuration
+import android.view.View
+import android.graphics.drawable.GradientDrawable
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.BitmapDrawable
@@ -29,6 +36,10 @@ class MainActivity : Activity() {
     private lateinit var keyboardInput: EditText
     private lateinit var settingsPanel: LinearLayout
     private lateinit var fullscreenButton: Button
+    private lateinit var audioButton: Button
+    @Volatile private var audioEnabled = true
+    private var audioPlayer: AudioTrack? = null
+    private var audioRate = 0
     private lateinit var rootLayout: LinearLayout
     private lateinit var modeBar: LinearLayout
     private var touchpadMode = false
@@ -50,20 +61,22 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(20, 18, 20, 14)
-            setBackgroundColor(Color.rgb(17, 23, 34))
+            setPadding(16, 14, 16, 10)
+            setBackgroundColor(Color.rgb(12, 17, 29))
         }
         fun label(value: String): TextView = TextView(this).apply { text = value; setTextColor(Color.WHITE); textSize = 14f }
         fun entry(hintText: String, value: String = ""): EditText = EditText(this).apply {
             hint = hintText; setText(value); setSingleLine(true)
             setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); textSize = 14f
         }
-        rootLayout.addView(label("AZ RemoteConnect — Android → Windows LAN"))
+        rootLayout.addView(label("AZ RemoteConnect  •  Secure LAN").apply { textSize = 20f; setTextColor(Color.rgb(230,239,255)); setPadding(8, 8, 8, 12) })
         hostInput = entry("Laptop IP address", "192.168.1.2")
         codeInput = entry("Laptop pairing code (6 digits)")
         fingerprintInput = entry("Laptop verification code (12 characters)")
         settingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         settingsPanel.addView(hostInput); settingsPanel.addView(codeInput); settingsPanel.addView(fingerprintInput)
+        settingsPanel.setPadding(12, 8, 12, 8)
+        settingsPanel.background = GradientDrawable().apply { setColor(Color.rgb(25,34,52)); cornerRadius = 22f }
         rootLayout.addView(settingsPanel)
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
@@ -109,10 +122,20 @@ class MainActivity : Activity() {
         fullscreenButton = Button(this).apply { text = "Full screen"; setOnClickListener { setFullscreen(!fullScreen) } }
         modeBar.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
         modeBar.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
+        audioButton = Button(this).apply {
+            text = "Audio: On"
+            setOnClickListener {
+                audioEnabled = !audioEnabled
+                text = if (audioEnabled) "Audio: On" else "Audio: Off"
+                if (!audioEnabled) { audioPlayer?.pause(); audioPlayer?.flush() } else audioPlayer?.play()
+            }
+        }
+        modeBar.addView(audioButton, LinearLayout.LayoutParams(0, -2, 1f))
         rootLayout.addView(modeBar)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
+            adjustViewBounds = true
             setOnTouchListener { _, event -> handleTouch(event) }
         }
         rootLayout.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -164,7 +187,16 @@ class MainActivity : Activity() {
                 info("Connected. Remote screen active.")
                 while (running) {
                     val message = read(input)
-                    if (message.optString("type") == "frame") {
+                    if (message.optString("type") == "audio") {
+                        if (audioEnabled) {
+                            val sampleRate = message.optInt("sampleRate", 48000)
+                            if (sampleRate in 8000..192000) {
+                                val pcm = android.util.Base64.decode(message.getString("pcm"), android.util.Base64.DEFAULT)
+                                try { playAudio(pcm, sampleRate) }
+                                catch (ex: Exception) { info("Audio unavailable: ${ex.message}") }
+                            }
+                        }
+                    } else if (message.optString("type") == "frame") {
                         val bytes = android.util.Base64.decode(message.getString("jpeg"), android.util.Base64.DEFAULT)
                         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
                         runOnUiThread {
@@ -181,6 +213,7 @@ class MainActivity : Activity() {
                 running = false
                 try { socket?.close() } catch (_: Exception) {}
                 output = null; socket = null
+                releaseAudio()
                 runOnUiThread { connectButton.isEnabled = true }
             }
         }
@@ -241,8 +274,35 @@ class MainActivity : Activity() {
         return true
     }
 
+    private fun playAudio(pcm: ByteArray, rate: Int) {
+        if (audioRate != rate || audioPlayer == null) {
+            releaseAudio()
+            val minimum = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minimum <= 0) return
+            audioPlayer = AudioTrack.Builder()
+                .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(rate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
+                .setTransferMode(AudioTrack.MODE_STREAM)
+                .setBufferSizeInBytes(kotlin.math.max(minimum * 3, rate / 4))
+                .build()
+            audioRate = rate
+            audioPlayer?.play()
+        }
+        audioPlayer?.write(pcm, 0, pcm.size, AudioTrack.WRITE_NON_BLOCKING)
+    }
+    private fun releaseAudio() {
+        try { audioPlayer?.pause(); audioPlayer?.flush(); audioPlayer?.release() } catch (_: Exception) {}
+        audioPlayer = null
+        audioRate = 0
+    }
+
     private fun setFullscreen(enabled: Boolean) {
         fullScreen = enabled
+        requestedOrientation = if (enabled) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                               else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         for (i in 0 until rootLayout.childCount) {
             val child = rootLayout.getChildAt(i)
             if (child !== screen && child !== modeBar)
@@ -252,6 +312,9 @@ class MainActivity : Activity() {
             (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
         fullscreenButton.text = if (enabled) "Exit full screen" else "Full screen"
+        screen.scaleType = ImageView.ScaleType.FIT_CENTER
+        rootLayout.setPadding(if (enabled) 0 else 16, if (enabled) 0 else 14,
+            if (enabled) 0 else 16, if (enabled) 0 else 10)
     }
 
     private fun disconnect() {
@@ -261,5 +324,12 @@ class MainActivity : Activity() {
         runOnUiThread { connectButton.isEnabled = true }
     }
 
-    override fun onDestroy() { disconnect(); super.onDestroy() }
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Keep the remote session and AudioTrack alive while the user rotates the phone.
+        screen.scaleType = ImageView.ScaleType.FIT_CENTER
+        screen.requestLayout()
+    }
+
+    override fun onDestroy() { disconnect(); releaseAudio(); super.onDestroy() }
 }
