@@ -1,0 +1,24 @@
+name: Build Windows EXE
+on:
+  push:
+    branches: [main, 'chore/**', 'feature/**']
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Publish self-contained single EXE
+        shell: pwsh
+        run: dotnet publish windows/AZRemoteConnect.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AZ-RemoteConnect-Windows-x64
+          path: publish/windows/
+          if-no-files-found: error
