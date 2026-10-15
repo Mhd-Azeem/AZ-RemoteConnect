@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var settingsPanel: LinearLayout
     private lateinit var fullscreenButton: Button
     private lateinit var rootLayout: LinearLayout
+    private lateinit var modeBar: LinearLayout
     private var touchpadMode = false
     private var fullScreen = false
     private var previousX = 0f
@@ -97,7 +98,7 @@ class MainActivity : Activity() {
         mouseButton("Scroll ↑") { thread { send(JSONObject().put("type", "scroll").put("delta", 120)) } }
         mouseButton("Scroll ↓") { thread { send(JSONObject().put("type", "scroll").put("delta", -120)) } }
         rootLayout.addView(mouseTools)
-        val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        modeBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val modeButton = Button(this).apply {
             text = "Screen Touch"
             setOnClickListener {
@@ -106,9 +107,9 @@ class MainActivity : Activity() {
             }
         }
         fullscreenButton = Button(this).apply { text = "Full screen"; setOnClickListener { setFullscreen(!fullScreen) } }
-        modes.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
+        modeBar.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
         modes.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
-        rootLayout.addView(modes)
+        rootLayout.addView(modeBar)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
@@ -242,7 +243,11 @@ class MainActivity : Activity() {
 
     private fun setFullscreen(enabled: Boolean) {
         fullScreen = enabled
-        settingsPanel.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        for (i in 0 until rootLayout.childCount) {
+            val child = rootLayout.getChildAt(i)
+            if (child !== screen && child !== modeBar)
+                child.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        }
         window.decorView.systemUiVisibility = if (enabled)
             (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                 or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
