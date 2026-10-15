@@ -58,7 +58,24 @@ internal sealed class LanHost : IAsyncDisposable
                     while (!sessionStop.IsCancellationRequested)
                     {
                         using var command = await RemoteTransport.ReadAsync(tls, sessionStop.Token);
-                        if (RemoteTransport.Field(command, "type") == "mouse")
+                        var kind = RemoteTransport.Field(command, "type");
+                        if (kind == "text")
+                        {
+                            var value = RemoteTransport.Field(command, "value");
+                            if (value.Length <= 200) foreach (var unit in value) SendUnicode(unit);
+                        }
+                        else if (kind == "key")
+                        {
+                            var key = RemoteTransport.Field(command, "key");
+                            ushort vk = key switch { "BACKSPACE" => 0x08, "ENTER" => 0x0D, "TAB" => 0x09, "ESC" => 0x1B, "DELETE" => 0x2E, "LEFT" => 0x25, "UP" => 0x26, "RIGHT" => 0x27, "DOWN" => 0x28, _ => (ushort)0 };
+                            if (vk != 0) SendVirtualKey(vk);
+                        }
+                        else if (kind == "scroll")
+                        {
+                            if (int.TryParse(RemoteTransport.Field(command, "delta"), out var delta))
+                                mouse_event(0x0800, 0, 0, unchecked((uint)Math.Clamp(delta, -480, 480)), UIntPtr.Zero);
+                        }
+                        else if (kind == "mouse")
                         {
                             if (!double.TryParse(RemoteTransport.Field(command, "x"), out var x) || !double.TryParse(RemoteTransport.Field(command, "y"), out var y)) continue;
                             if (x < 0 || x > 1 || y < 0 || y > 1) continue;
@@ -67,6 +84,7 @@ internal sealed class LanHost : IAsyncDisposable
                             var action = RemoteTransport.Field(command, "action");
                             if (action == "down") mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
                             if (action == "up") mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+                            if (action == "right") { mouse_event(0x0008, 0, 0, 0, UIntPtr.Zero); mouse_event(0x0010, 0, 0, 0, UIntPtr.Zero); }
                         }
                     }
                 }
@@ -74,6 +92,26 @@ internal sealed class LanHost : IAsyncDisposable
             }
             catch (Exception) { /* network/session ended */ }
         }
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct INPUT { public uint type; public InputUnion data; }
+    [StructLayout(LayoutKind.Explicit)] private struct InputUnion { [FieldOffset(0)] public KEYBDINPUT keyboard; }
+    [StructLayout(LayoutKind.Sequential)] private struct KEYBDINPUT { public ushort vk, scan; public uint flags, time; public UIntPtr extra; }
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
+    private static void SendUnicode(char character)
+    {
+        var pair = new [] {
+            new INPUT { type=1, data=new InputUnion { keyboard=new KEYBDINPUT { scan=character, flags=0x0004 } } },
+            new INPUT { type=1, data=new InputUnion { keyboard=new KEYBDINPUT { scan=character, flags=0x0004 | 0x0002 } } }
+        };
+        SendInput((uint)pair.Length, pair, Marshal.SizeOf<INPUT>());
+    }
+    private static void SendVirtualKey(ushort vk)
+    {
+        var pair = new [] {
+            new INPUT { type=1, data=new InputUnion { keyboard=new KEYBDINPUT { vk=vk } } },
+            new INPUT { type=1, data=new InputUnion { keyboard=new KEYBDINPUT { vk=vk, flags=0x0002 } } }
+        };
+        SendInput((uint)pair.Length, pair, Marshal.SizeOf<INPUT>());
     }
     private static async Task SendFrames(Stream stream, CancellationToken ct)
     {
@@ -88,7 +126,7 @@ internal sealed class LanHost : IAsyncDisposable
             parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 55L);
             bmp.Save(ms, encoder, parameters);
             await RemoteTransport.SendAsync(stream, new { type = "frame", jpeg = Convert.ToBase64String(ms.ToArray()) }, ct);
-            await Task.Delay(250, ct);
+            await Task.Delay(16, ct); // best-effort, actual FPS depends on JPEG encoding and network
         }
     }
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
