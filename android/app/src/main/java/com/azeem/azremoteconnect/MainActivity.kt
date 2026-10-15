@@ -91,7 +91,11 @@ class MainActivity : Activity() {
         hosting.addView(Button(this).apply {
             text = "Share this phone"
             setOnClickListener {
-                if (RemoteAccessibility.instance == null) {
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 811)
+                    Toast.makeText(this@MainActivity, "Allow notifications to receive connection approvals, then tap Share again", Toast.LENGTH_LONG).show()
+                } else if (RemoteAccessibility.instance == null) {
                     Toast.makeText(this@MainActivity, "Enable AZ RemoteConnect accessibility service for remote touch", Toast.LENGTH_LONG).show()
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 } else {
@@ -107,6 +111,14 @@ class MainActivity : Activity() {
         rootLayout.addView(hosting)
         hostDetails = label("Host this phone: enable accessibility and approve screen capture.").apply { textSize = 12f }
         rootLayout.addView(hostDetails)
+        rootLayout.addView(Button(this).apply {
+            text = "Refresh host code"
+            setOnClickListener {
+                hostDetails.text = if (AndroidHostService.active)
+                    "Phone hosting • Pair: ${AndroidHostService.code} • Verify: ${AndroidHostService.verification} • Port 48765"
+                    else "Phone host is inactive; start screen sharing above."
+            }
+        })
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
         val disconnect = Button(this).apply { text = "Disconnect"; setOnClickListener { disconnect() } }
