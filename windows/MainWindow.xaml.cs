@@ -25,7 +25,7 @@ public partial class MainWindow : Window
         try
         {
             host = new LanHost(() => Dispatcher.InvokeAsync(() =>
-                MessageBox.Show(this, "A remote device wants to control this computer. Allow?", "Authorize remote access", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes).Task);
+                System.Windows.MessageBox.Show(this, "A remote device wants to control this computer. Allow?", "Authorize remote access", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes).Task);
             host.Start();
             HostDetails.Text = $"Listening on port 48765\nPairing code: {host.PairCode}\nTLS SHA-256 fingerprint:\n{host.Fingerprint}\nShare these securely with the controller.";
             Status.Text = "Hosting on the LAN; waiting for approval.";
