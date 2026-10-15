@@ -71,21 +71,21 @@ class MainActivity : Activity() {
         rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 14, 16, 10)
-            setBackgroundColor(Color.rgb(12, 17, 29))
+            setBackgroundColor(Color.rgb(6, 19, 47))
         }
         fun label(value: String): TextView = TextView(this).apply { text = value; setTextColor(Color.WHITE); textSize = 14f }
         fun entry(hintText: String, value: String = ""): EditText = EditText(this).apply {
             hint = hintText; setText(value); setSingleLine(true)
             setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); textSize = 14f
         }
-        rootLayout.addView(label("AZ RemoteConnect  •  Secure LAN").apply { textSize = 20f; setTextColor(Color.rgb(230,239,255)); setPadding(8, 8, 8, 12) })
+        rootLayout.addView(label("AZ RemoteConnect  •  Secure LAN").apply { textSize = 20f; setTextColor(Color.rgb(231,244,255)); setPadding(8, 8, 8, 12) })
         hostInput = entry("Laptop IP address", "192.168.1.2")
         codeInput = entry("Laptop pairing code (6 digits)")
-        fingerprintInput = entry("Laptop verification code (12 characters)")
+        fingerprintInput = entry("Laptop verification code (6 characters)")
         settingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         settingsPanel.addView(hostInput); settingsPanel.addView(codeInput); settingsPanel.addView(fingerprintInput)
         settingsPanel.setPadding(12, 8, 12, 8)
-        settingsPanel.background = GradientDrawable().apply { setColor(Color.rgb(25,34,52)); cornerRadius = 22f }
+        settingsPanel.background = GradientDrawable().apply { setColor(Color.rgb(14, 42, 86)); cornerRadius = 22f }
         rootLayout.addView(settingsPanel)
         val hosting = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         hosting.addView(Button(this).apply {
@@ -172,6 +172,26 @@ class MainActivity : Activity() {
             }
         }
         modeBar.addView(audioButton, LinearLayout.LayoutParams(0, -2, 1f))
+        fun styleButton(button: Button, primary: Boolean) {
+            button.isAllCaps = false
+            button.textSize = 13f
+            button.setTextColor(Color.WHITE)
+            button.background = GradientDrawable().apply {
+                setColor(if (primary) Color.rgb(23, 112, 242) else Color.rgb(26, 64, 119))
+                cornerRadius = 18f
+                setStroke(1, Color.rgb(55, 136, 239))
+            }
+            button.setPadding(12, 10, 12, 10)
+            val params = button.layoutParams as? LinearLayout.LayoutParams
+            if (params != null) { params.setMargins(3, 5, 3, 5); button.layoutParams = params }
+        }
+        listOf(connectButton, modeButton, fullscreenButton, audioButton).forEach { styleButton(it, it === connectButton) }
+        for (panel in listOf(hosting, controls, tools, mouseTools)) {
+            for (i in 0 until panel.childCount) {
+                val child = panel.getChildAt(i)
+                if (child is Button) styleButton(child, child === connectButton)
+            }
+        }
         rootLayout.addView(modeBar)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
@@ -220,8 +240,8 @@ class MainActivity : Activity() {
         val ip = hostInput.text.toString().trim()
         val code = codeInput.text.toString().trim()
         val pin = fingerprintInput.text.toString().replace(":", "").replace(" ", "").uppercase()
-        if (!code.matches(Regex("[0-9]{6}")) || !pin.matches(Regex("[0-9A-F]{12}"))) {
-            info("Enter the 6-digit code and the 12-character verification code shown on the laptop.")
+        if (!code.matches(Regex("[0-9]{6}")) || !pin.matches(Regex("[0-9A-F]{6}"))) {
+            info("Enter the 6-digit code and the 6-character verification code shown on the laptop.")
             return
         }
         running = true
@@ -247,7 +267,7 @@ class MainActivity : Activity() {
                 val certificate = ssl.session.peerCertificates.first() as X509Certificate
                 val actual = MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
                     .joinToString("") { "%02X".format(it) }
-                if (actual.take(12) != pin) throw SecurityException("Fingerprint mismatch. Connection rejected.")
+                if (actual.take(6) != pin) throw SecurityException("Fingerprint mismatch. Connection rejected.")
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 send(JSONObject().put("type", "pair").put("code", code))
