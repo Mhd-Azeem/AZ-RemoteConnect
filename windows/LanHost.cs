@@ -13,6 +13,8 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Collections.Concurrent;
+using NAudio.Wave;
 
 namespace AZRemoteConnect;
 
@@ -25,6 +27,7 @@ internal sealed class LanHost : IAsyncDisposable
     private int attempts;
     public string PairCode { get; } = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
     public string Fingerprint => RemoteTransport.Fingerprint(certificate);
+    public string VerificationCode => Fingerprint[..6];
     public LanHost(Func<Task<bool>> approve) => this.approve = approve;
     public void Start() { listener.Start(); _ = AcceptLoop(); }
     private async Task AcceptLoop()
@@ -52,7 +55,7 @@ internal sealed class LanHost : IAsyncDisposable
                 if (!await approve()) return;
                 await RemoteTransport.SendAsync(tls, new { type = "approved" }, stop.Token);
                 using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-                var frames = SendFrames(tls, sessionStop.Token);
+                var frames = SendFramesAndAudio(tls, sessionStop.Token);
                 try
                 {
                     while (!sessionStop.IsCancellationRequested)
@@ -74,6 +77,22 @@ internal sealed class LanHost : IAsyncDisposable
                         {
                             if (int.TryParse(RemoteTransport.Field(command, "delta"), out var delta))
                                 mouse_event(0x0800, 0, 0, unchecked((uint)Math.Clamp(delta, -480, 480)), UIntPtr.Zero);
+                        }
+                        else if (kind == "relative")
+                        {
+                            if (double.TryParse(RemoteTransport.Field(command, "dx"), out var dx) &&
+                                double.TryParse(RemoteTransport.Field(command, "dy"), out var dy) &&
+                                double.IsFinite(dx) && double.IsFinite(dy) &&
+                                Math.Abs(dx) <= 2000 && Math.Abs(dy) <= 2000)
+                            {
+                                var pos = Cursor.Position;
+                                Cursor.Position = new Point(pos.X + (int)dx, pos.Y + (int)dy);
+                            }
+                        }
+                        else if (kind == "click")
+                        {
+                            var button = RemoteTransport.Field(command, "button");
+                            if (button == "left") { mouse_event(0x0002,0,0,0,UIntPtr.Zero); mouse_event(0x0004,0,0,0,UIntPtr.Zero); }
                         }
                         else if (kind == "mouse")
                         {
@@ -113,20 +132,72 @@ internal sealed class LanHost : IAsyncDisposable
         };
         SendInput((uint)pair.Length, pair, Marshal.SizeOf<INPUT>());
     }
-    private static async Task SendFrames(Stream stream, CancellationToken ct)
+    // Loopback capture records the Windows default playback device, not the microphone.
+    // Audio messages share the existing TLS stream with video so no second unauthenticated port is opened.
+    private static async Task SendFramesAndAudio(Stream stream, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        using var capture = new WasapiLoopbackCapture();
+        var format = capture.WaveFormat;
+        var pending = new ConcurrentQueue<byte[]>();
+        int queued = 0;
+        bool supported = format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32
+                         || format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16;
+        if (supported)
         {
-            var bounds = SystemInformation.VirtualScreen;
-            using var bmp = new Bitmap(bounds.Width, bounds.Height);
-            using (var graphics = Graphics.FromImage(bmp)) graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
-            using var ms = new MemoryStream();
+            capture.DataAvailable += (sender, args) =>
+            {
+                int sampleBytes = format.BitsPerSample / 8;
+                int samples = args.BytesRecorded / (sampleBytes * format.Channels);
+                var pcm = new byte[samples * 2]; // mono PCM16; Android AudioTrack plays at source sample rate
+                for (int i = 0; i < samples; i++)
+                {
+                    float sum = 0f;
+                    for (int channel = 0; channel < format.Channels; channel++)
+                    {
+                        int offset = (i * format.Channels + channel) * sampleBytes;
+                        float value = format.BitsPerSample == 32
+                            ? BitConverter.ToSingle(args.Buffer, offset)
+                            : BitConverter.ToInt16(args.Buffer, offset) / 32768f;
+                        sum += value;
+                    }
+                    short value16 = (short)Math.Clamp((int)(sum / format.Channels * 32767f), -32768, 32767);
+                    pcm[i * 2] = (byte)value16;
+                    pcm[i * 2 + 1] = (byte)((ushort)value16 >> 8);
+                }
+                pending.Enqueue(pcm);
+                Interlocked.Increment(ref queued);
+                while (Volatile.Read(ref queued) > 6 && pending.TryDequeue(out _))
+                    Interlocked.Decrement(ref queued);
+            };
+            capture.StartRecording();
+        }
+        try
+        {
             var encoder = ImageCodecInfo.GetImageEncoders().First(x => x.MimeType == "image/jpeg");
-            using var parameters = new EncoderParameters(1);
-            parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 55L);
-            bmp.Save(ms, encoder, parameters);
-            await RemoteTransport.SendAsync(stream, new { type = "frame", jpeg = Convert.ToBase64String(ms.ToArray()) }, ct);
-            await Task.Delay(16, ct); // best-effort, actual FPS depends on JPEG encoding and network
+            while (!ct.IsCancellationRequested)
+            {
+                // Send a bounded amount of buffered audio before the next video frame.
+                for (int i = 0; i < 3 && pending.TryDequeue(out var chunk); i++)
+                {
+                    Interlocked.Decrement(ref queued);
+                    await RemoteTransport.SendAsync(stream,
+                        new { type = "audio", sampleRate = format.SampleRate, pcm = Convert.ToBase64String(chunk) }, ct);
+                }
+                var bounds = SystemInformation.VirtualScreen;
+                using var bmp = new Bitmap(bounds.Width, bounds.Height);
+                using (var graphics = Graphics.FromImage(bmp))
+                    graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
+                using var ms = new MemoryStream();
+                using var parameters = new EncoderParameters(1);
+                parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 50L);
+                bmp.Save(ms, encoder, parameters);
+                await RemoteTransport.SendAsync(stream, new { type = "frame", jpeg = Convert.ToBase64String(ms.ToArray()) }, ct);
+                await Task.Delay(16, ct); // 60 FPS target only; actual performance depends on system/network
+            }
+        }
+        finally
+        {
+            if (supported) capture.StopRecording();
         }
     }
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
