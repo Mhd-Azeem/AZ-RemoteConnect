@@ -128,7 +128,7 @@ class AndroidHostService : Service() {
         }
         val cert = store.getCertificate(alias)
         verification = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-            .joinToString("") { "%02X".format(it) }.take(12)
+            .joinToString("") { "%02X".format(it) }.take(6)
         val km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         km.init(store, null)
         return SSLContext.getInstance("TLS").apply { init(km.keyManagers, null, SecureRandom()) }.serverSocketFactory
