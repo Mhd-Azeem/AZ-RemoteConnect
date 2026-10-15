@@ -143,6 +143,8 @@ class AndroidHostService : Service() {
         try {
             val factory = makeTls()
             server = factory.createServerSocket(48765)
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(42, notice("Code: $code • Verify: $verification • Port 48765"))
             while (accepting.get()) {
                 val client = server?.accept() as? SSLSocket ?: break
                 Thread({ handle(client) }, "az-android-client").start()
@@ -169,22 +171,23 @@ class AndroidHostService : Service() {
                 }
                 ssl.soTimeout = 0
                 send(output, JSONObject().put("type", "approved"))
-                var frameAt = System.currentTimeMillis()
-                while (active && !ssl.isClosed) {
-                    if (input.available() >= 4) {
-                        val command = read(input)
-                        val service = RemoteAccessibility.instance
-                        if (service != null) {
+                Thread({
+                    try {
+                        while (active && !ssl.isClosed) {
+                            val command = read(input)
+                            val service = RemoteAccessibility.instance ?: continue
                             val kind = command.optString("type")
                             val x = command.optDouble("x", 0.5).coerceIn(0.0, 1.0).toFloat() * frameWidth
                             val y = command.optDouble("y", 0.5).coerceIn(0.0, 1.0).toFloat() * frameHeight
                             when (kind) {
-                                "mouse" -> if (command.optString("action") == "up" || command.optString("action") == "right")
-                                    service.click(x, y)
-                                "click" -> service.click(frameWidth * .5f, frameHeight * .5f)
+                                "mouse" -> if (command.optString("action") == "up") service.click(x, y)
+                                "click" -> service.click(frameWidth * 0.5f, frameHeight * 0.5f)
                             }
                         }
-                    }
+                    } catch (_: Exception) { try { ssl.close() } catch (_: Exception) {} }
+                }, "az-host-input").start()
+                var frameAt = System.currentTimeMillis()
+                while (active && !ssl.isClosed) {
                     if (System.currentTimeMillis() - frameAt >= 120) {
                         frameAt = System.currentTimeMillis()
                         val jpg = captureFrame()
