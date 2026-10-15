@@ -108,7 +108,7 @@ class MainActivity : Activity() {
         }
         fullscreenButton = Button(this).apply { text = "Full screen"; setOnClickListener { setFullscreen(!fullScreen) } }
         modeBar.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
-        modes.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
+        modeBar.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
         rootLayout.addView(modeBar)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
