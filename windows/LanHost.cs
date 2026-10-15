@@ -25,6 +25,7 @@ internal sealed class LanHost : IAsyncDisposable
     private int attempts;
     public string PairCode { get; } = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
     public string Fingerprint => RemoteTransport.Fingerprint(certificate);
+    public string VerificationCode => Fingerprint[..12];
     public LanHost(Func<Task<bool>> approve) => this.approve = approve;
     public void Start() { listener.Start(); _ = AcceptLoop(); }
     private async Task AcceptLoop()
@@ -74,6 +75,22 @@ internal sealed class LanHost : IAsyncDisposable
                         {
                             if (int.TryParse(RemoteTransport.Field(command, "delta"), out var delta))
                                 mouse_event(0x0800, 0, 0, unchecked((uint)Math.Clamp(delta, -480, 480)), UIntPtr.Zero);
+                        }
+                        else if (kind == "relative")
+                        {
+                            if (double.TryParse(RemoteTransport.Field(command, "dx"), out var dx) &&
+                                double.TryParse(RemoteTransport.Field(command, "dy"), out var dy) &&
+                                double.IsFinite(dx) && double.IsFinite(dy) &&
+                                Math.Abs(dx) <= 2000 && Math.Abs(dy) <= 2000)
+                            {
+                                var pos = Cursor.Position;
+                                Cursor.Position = new Point(pos.X + (int)dx, pos.Y + (int)dy);
+                            }
+                        }
+                        else if (kind == "click")
+                        {
+                            var button = RemoteTransport.Field(command, "button");
+                            if (button == "left") { mouse_event(0x0002,0,0,0,UIntPtr.Zero); mouse_event(0x0004,0,0,0,UIntPtr.Zero); }
                         }
                         else if (kind == "mouse")
                         {
