@@ -27,7 +27,7 @@ internal sealed class LanHost : IAsyncDisposable
     private int attempts;
     public string PairCode { get; } = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
     public string Fingerprint => RemoteTransport.Fingerprint(certificate);
-    public string VerificationCode => Fingerprint[..12];
+    public string VerificationCode => Fingerprint[..6];
     public LanHost(Func<Task<bool>> approve) => this.approve = approve;
     public void Start() { listener.Start(); _ = AcceptLoop(); }
     private async Task AcceptLoop()
