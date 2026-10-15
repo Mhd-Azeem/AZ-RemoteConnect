@@ -1,31 +1,24 @@
 # AZ RemoteConnect
 
-Cross-platform remote access software for Android and Windows.
+Open-source-in-progress remote access suite targeting Android and Windows.
 
-> Status: foundation scaffold. Remote control, streaming, and session authentication are **not yet implemented**. Do not use for real remote access.
+**Current status:** buildable starter apps and signaling-service skeleton; remote control, video streaming, end-to-end authentication and file transfer are **not implemented**. The server is deliberately a local-only placeholder. Do not expose it publicly.
 
-## Targets
+## Project layout
 
-- Android APK (Kotlin, Jetpack Compose)
-- Standalone Windows x64 EXE (.NET 8 WPF)
-- Signaling service (Node.js + TypeScript)
-- Shared protocol, configuration, and documentation
-- GitHub Actions CI for source checks and platform builds
+- `android/` — Android APK starter (Kotlin)
+- `windows/` — Windows desktop starter (WPF / .NET 8)
+- `server/` — local-only signaling skeleton (Node.js)
+- `protocol/` — wire protocol draft
+- `docs/` — architecture, security, Codex handoff
+- `.github/workflows/` — automated build and validation
 
-## Intended connection directions
+## Build
 
-Android → Windows, Windows → Android, Android → Android, Windows → Windows.
+Android: `gradle -p android assembleDebug` (JDK 17, Android SDK 35 and Gradle 8.11.1). Output `android/app/build/outputs/apk/debug/app-debug.apk`.
 
-## Safety requirements
+Windows: `dotnet publish windows/AZRemoteConnect.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableWindowsTargeting=true` (Windows runner recommended).
 
-Every remote session must be authenticated and authorized. Android screen capture requires user consent; Android remote input requires a user-enabled accessibility service. No stealth installation, silent capture, or approval bypass. Credentials must never be committed to the repository.
+Server: `cd server && npm install && npm run build && npm test`. Its example WebSocket listener defaults to localhost and is NOT production-ready.
 
-## Development milestones
-
-1. Scaffold and CI (initial phase)
-2. Authenticated Windows-to-Windows LAN proof of concept
-3. Android capture/viewer and explicitly enabled remote input
-4. Signaling, WebRTC, STUN/TURN and secure internet access
-5. Transfers, quality controls, signed updates and release hardening
-
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/CODEX_HANDOFF.md](docs/CODEX_HANDOFF.md), and [docs/SECURITY.md](docs/SECURITY.md).
+See `docs/CODEX_HANDOFF.md` for the next development tasks. No APK/EXE builds or releases have been verified yet.
