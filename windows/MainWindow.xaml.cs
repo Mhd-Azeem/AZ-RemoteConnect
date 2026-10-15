@@ -36,8 +36,8 @@ public partial class MainWindow : Window
     {
         if (viewerStop != null) return;
         var expected = RemoteFingerprint.Text.Trim().Replace(":", "").Replace(" ", "").ToUpperInvariant();
-        if ((expected.Length != 12 && expected.Length != 64) || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]+$"))
-        { Status.Text = "Enter the host's 12-digit verification code or full TLS fingerprint."; return; }
+        if ((expected.Length != 6 && expected.Length != 64) || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]+$"))
+        { Status.Text = "Enter the host's 6-character verification code or full TLS fingerprint."; return; }
         if (!int.TryParse(RemotePort.Text, out int port) || port is < 1 or > 65535) { Status.Text = "Invalid port"; return; }
         if (!System.Text.RegularExpressions.Regex.IsMatch(RemoteCode.Text.Trim(), "^[0-9]{6}$")) { Status.Text = "Invalid pairing code"; return; }
         viewerStop = new CancellationTokenSource();
