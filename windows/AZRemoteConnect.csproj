@@ -3,9 +3,9 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>AZRemoteConnect</AssemblyName>
-    <RootNamespace>AZRemoteConnect</RootNamespace>
   </PropertyGroup>
 </Project>
