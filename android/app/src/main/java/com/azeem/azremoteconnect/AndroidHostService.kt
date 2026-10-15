@@ -34,6 +34,7 @@ class AndroidHostService : Service() {
         @Volatile var code = ""
         @Volatile var verification = ""
         @Volatile var active = false
+        @Volatile var hostError = ""
     }
     private var server: ServerSocket? = null
     private var projection: MediaProjection? = null
@@ -111,7 +112,7 @@ class AndroidHostService : Service() {
             active = true
             accepting.set(true)
             Thread({ serve() }, "az-android-host").start()
-        } catch (e: Exception) { stopSelf() }
+        } catch (e: Exception) { hostError = "Screen capture start: ${e.javaClass.simpleName}: ${e.message}"; android.util.Log.e("AZRemoteHost", hostError, e); stopSelf() }
         return START_NOT_STICKY
     }
     private fun makeTls(): SSLServerSocketFactory {
@@ -151,7 +152,7 @@ class AndroidHostService : Service() {
                 val client = server?.accept() as? SSLSocket ?: break
                 Thread({ handle(client) }, "az-android-client").start()
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { hostError = "Host server: ${e.javaClass.simpleName}: ${e.message}"; android.util.Log.e("AZRemoteHost", hostError, e); active = false }
     }
     private fun handle(client: SSLSocket) {
         client.use { ssl ->
@@ -161,7 +162,10 @@ class AndroidHostService : Service() {
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 val output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 val pair = read(input)
-                if (pair.optString("type") != "pair" || pair.optString("code") != code) return
+                if (pair.optString("type") != "pair" || pair.optString("code") != code) {
+                    send(output, JSONObject().put("type", "error").put("message", "Incorrect pairing code"))
+                    return
+                }
                 synchronized(approvalLock) { approved = null }
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(42, notice("Remote device requests control • approve or deny", true))
@@ -169,7 +173,11 @@ class AndroidHostService : Service() {
                     val until = System.currentTimeMillis() + 30000
                     while (approved == null && System.currentTimeMillis() < until)
                         approvalLock.wait((until - System.currentTimeMillis()).coerceAtLeast(1))
-                    if (approved != true) return
+                    if (approved != true) {
+                        send(output, JSONObject().put("type", "error").put("message",
+                            if (approved == false) "Host denied access" else "Host approval timed out"))
+                        return
+                    }
                 }
                 ssl.soTimeout = 0
                 send(output, JSONObject().put("type", "approved"))
@@ -205,7 +213,10 @@ class AndroidHostService : Service() {
                     }
                     Thread.sleep(8)
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                hostError = "Session: ${e.javaClass.simpleName}: ${e.message}"
+                android.util.Log.e("AZRemoteHost", hostError, e)
+            }
         }
     }
     private fun captureFrame(): ByteArray? {
