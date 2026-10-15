@@ -44,6 +44,8 @@ class AndroidHostService : Service() {
     private val approvalLock = Object()
     private var frameWidth = 0
     private var frameHeight = 0
+    private var pointerX = 0.5f
+    private var pointerY = 0.5f
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -180,8 +182,15 @@ class AndroidHostService : Service() {
                             val x = command.optDouble("x", 0.5).coerceIn(0.0, 1.0).toFloat() * frameWidth
                             val y = command.optDouble("y", 0.5).coerceIn(0.0, 1.0).toFloat() * frameHeight
                             when (kind) {
-                                "mouse" -> if (command.optString("action") == "up") service.click(x, y)
-                                "click" -> service.click(frameWidth * 0.5f, frameHeight * 0.5f)
+                                "mouse" -> {
+                                    pointerX = x / frameWidth; pointerY = y / frameHeight
+                                    if (command.optString("action") == "up") service.click(x, y)
+                                }
+                                "relative" -> {
+                                    pointerX = (pointerX + command.optDouble("dx", 0.0).toFloat() / frameWidth).coerceIn(0f, 1f)
+                                    pointerY = (pointerY + command.optDouble("dy", 0.0).toFloat() / frameHeight).coerceIn(0f, 1f)
+                                }
+                                "click" -> service.click(frameWidth * pointerX, frameHeight * pointerY)
                             }
                         }
                     } catch (_: Exception) { try { ssl.close() } catch (_: Exception) {} }
