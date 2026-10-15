@@ -26,10 +26,13 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var screen: ImageView
     private lateinit var connectButton: Button
+    private lateinit var keyboardInput: EditText
     @Volatile private var running = false
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var output: DataOutputStream? = null
     private val writeLock = Any()
+    private var lastX = 0.5f
+    private var lastY = 0.5f
     private var imageW = 0
     private var imageH = 0
 
@@ -58,13 +61,38 @@ class MainActivity : Activity() {
         root.addView(controls)
         status = label("Connect to your Windows laptop on the same Wi-Fi network.")
         root.addView(status)
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        keyboardInput = entry("Type on laptop")
+        tools.addView(keyboardInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
+        fun toolButton(title: String, action: () -> Unit) {
+            tools.addView(Button(this).apply { text = title; textSize=11f; setOnClickListener { action() } },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        toolButton("Send") {
+            val value = keyboardInput.text.toString()
+            if (value.isNotEmpty()) { thread { send(JSONObject().put("type", "text").put("value", value.take(200))) }; keyboardInput.text.clear() }
+        }
+        toolButton("⌫") { thread { send(JSONObject().put("type", "key").put("key", "BACKSPACE")) } }
+        toolButton("↵") { thread { send(JSONObject().put("type", "key").put("key", "ENTER")) } }
+        root.addView(tools)
+        val mouseTools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun mouseButton(title: String, action: () -> Unit) {
+            mouseTools.addView(Button(this).apply { text = title; textSize=11f; setOnClickListener { action() } },
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        }
+        mouseButton("Right click") {
+            thread { send(JSONObject().put("type", "mouse").put("x", lastX.toDouble()).put("y", lastY.toDouble()).put("action", "right")) }
+        }
+        mouseButton("Scroll ↑") { thread { send(JSONObject().put("type", "scroll").put("delta", 120)) } }
+        mouseButton("Scroll ↓") { thread { send(JSONObject().put("type", "scroll").put("delta", -120)) } }
+        root.addView(mouseTools)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
             setOnTouchListener { _, event -> handleTouch(event) }
         }
         root.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(label("Requires Windows host approval. Touch to click, drag to move the remote mouse. LAN preview only."))
+        root.addView(label("Pairing approval required. Tap, drag, right click, keyboard and scroll. Fast JPEG is best-effort, not guaranteed 60 FPS."))
         setContentView(root)
     }
 
@@ -161,6 +189,8 @@ class MainActivity : Activity() {
         val x = (event.x - (screen.width - shownW) / 2f) / shownW
         val y = (event.y - (screen.height - shownH) / 2f) / shownH
         if (x !in 0f..1f || y !in 0f..1f) return true
+        lastX = x
+        lastY = y
         val action = when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> "down"
             MotionEvent.ACTION_MOVE -> "move"
