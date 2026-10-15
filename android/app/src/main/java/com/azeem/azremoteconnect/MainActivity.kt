@@ -116,7 +116,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 hostDetails.text = if (AndroidHostService.active)
                     "Phone hosting • Pair: ${AndroidHostService.code} • Verify: ${AndroidHostService.verification} • Port 48765"
-                    else "Phone host is inactive; start screen sharing above."
+                    else "Phone host is inactive. ${AndroidHostService.hostError.ifBlank { "Start screen sharing above." }}"
             }
         })
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
