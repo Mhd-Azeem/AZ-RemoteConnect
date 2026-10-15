@@ -27,6 +27,15 @@ class MainActivity : Activity() {
     private lateinit var screen: ImageView
     private lateinit var connectButton: Button
     private lateinit var keyboardInput: EditText
+    private lateinit var settingsPanel: LinearLayout
+    private lateinit var fullscreenButton: Button
+    private lateinit var rootLayout: LinearLayout
+    private var touchpadMode = false
+    private var fullScreen = false
+    private var previousX = 0f
+    private var previousY = 0f
+    private var moved = false
+    private var downTime = 0L
     @Volatile private var running = false
     @Volatile private var socket: SSLSocket? = null
     @Volatile private var output: DataOutputStream? = null
@@ -38,7 +47,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val root = LinearLayout(this).apply {
+        rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(20, 18, 20, 14)
             setBackgroundColor(Color.rgb(17, 23, 34))
@@ -48,19 +57,21 @@ class MainActivity : Activity() {
             hint = hintText; setText(value); setSingleLine(true)
             setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); textSize = 14f
         }
-        root.addView(label("AZ RemoteConnect — Android → Windows LAN"))
+        rootLayout.addView(label("AZ RemoteConnect — Android → Windows LAN"))
         hostInput = entry("Laptop IP address", "192.168.1.2")
         codeInput = entry("Laptop pairing code (6 digits)")
-        fingerprintInput = entry("Laptop TLS fingerprint (64 hex characters)")
-        root.addView(hostInput); root.addView(codeInput); root.addView(fingerprintInput)
+        fingerprintInput = entry("Laptop verification code (12 characters)")
+        settingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        settingsPanel.addView(hostInput); settingsPanel.addView(codeInput); settingsPanel.addView(fingerprintInput)
+        rootLayout.addView(settingsPanel)
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
         val disconnect = Button(this).apply { text = "Disconnect"; setOnClickListener { disconnect() } }
         controls.addView(connectButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         controls.addView(disconnect, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        root.addView(controls)
+        rootLayout.addView(controls)
         status = label("Connect to your Windows laptop on the same Wi-Fi network.")
-        root.addView(status)
+        rootLayout.addView(status)
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         keyboardInput = entry("Type on laptop")
         tools.addView(keyboardInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
@@ -74,7 +85,7 @@ class MainActivity : Activity() {
         }
         toolButton("⌫") { thread { send(JSONObject().put("type", "key").put("key", "BACKSPACE")) } }
         toolButton("↵") { thread { send(JSONObject().put("type", "key").put("key", "ENTER")) } }
-        root.addView(tools)
+        rootLayout.addView(tools)
         val mouseTools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fun mouseButton(title: String, action: () -> Unit) {
             mouseTools.addView(Button(this).apply { text = title; textSize=11f; setOnClickListener { action() } },
@@ -85,15 +96,27 @@ class MainActivity : Activity() {
         }
         mouseButton("Scroll ↑") { thread { send(JSONObject().put("type", "scroll").put("delta", 120)) } }
         mouseButton("Scroll ↓") { thread { send(JSONObject().put("type", "scroll").put("delta", -120)) } }
-        root.addView(mouseTools)
+        rootLayout.addView(mouseTools)
+        val modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val modeButton = Button(this).apply {
+            text = "Screen Touch"
+            setOnClickListener {
+                touchpadMode = !touchpadMode
+                text = if (touchpadMode) "Touchpad" else "Screen Touch"
+            }
+        }
+        fullscreenButton = Button(this).apply { text = "Full screen"; setOnClickListener { setFullscreen(!fullScreen) } }
+        modes.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
+        modes.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
+        rootLayout.addView(modes)
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
             setOnTouchListener { _, event -> handleTouch(event) }
         }
-        root.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
-        root.addView(label("Pairing approval required. Tap, drag, right click, keyboard and scroll. Fast JPEG is best-effort, not guaranteed 60 FPS."))
-        setContentView(root)
+        rootLayout.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
+        rootLayout.addView(label("Pairing approval required. Tap, drag, right click, keyboard and scroll. Fast JPEG is best-effort, not guaranteed 60 FPS."))
+        setContentView(rootLayout)
     }
 
     private fun info(message: String) = runOnUiThread { status.text = message }
@@ -103,8 +126,8 @@ class MainActivity : Activity() {
         val ip = hostInput.text.toString().trim()
         val code = codeInput.text.toString().trim()
         val pin = fingerprintInput.text.toString().replace(":", "").replace(" ", "").uppercase()
-        if (!code.matches(Regex("[0-9]{6}")) || !pin.matches(Regex("[0-9A-F]{64}"))) {
-            info("Enter the 6-digit code and the complete 64-character TLS fingerprint shown on the laptop.")
+        if (!code.matches(Regex("[0-9]{6}")) || !pin.matches(Regex("[0-9A-F]{12}"))) {
+            info("Enter the 6-digit code and the 12-character verification code shown on the laptop.")
             return
         }
         running = true
@@ -130,7 +153,7 @@ class MainActivity : Activity() {
                 val certificate = ssl.session.peerCertificates.first() as X509Certificate
                 val actual = MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
                     .joinToString("") { "%02X".format(it) }
-                if (actual != pin) throw SecurityException("Fingerprint mismatch. Connection rejected.")
+                if (actual.take(12) != pin) throw SecurityException("Fingerprint mismatch. Connection rejected.")
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 send(JSONObject().put("type", "pair").put("code", code))
@@ -189,6 +212,22 @@ class MainActivity : Activity() {
         val x = (event.x - (screen.width - shownW) / 2f) / shownW
         val y = (event.y - (screen.height - shownH) / 2f) / shownH
         if (x !in 0f..1f || y !in 0f..1f) return true
+        if (touchpadMode) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { previousX = event.x; previousY = event.y; moved = false; downTime = System.currentTimeMillis() }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - previousX
+                    val dy = event.y - previousY
+                    previousX = event.x; previousY = event.y
+                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 2) moved = true
+                    thread { send(JSONObject().put("type", "relative").put("dx", (dx * 1.5).toDouble()).put("dy", (dy * 1.5).toDouble())) }
+                }
+                MotionEvent.ACTION_UP -> if (!moved && System.currentTimeMillis() - downTime < 450) {
+                    thread { send(JSONObject().put("type", "click").put("button", "left")) }
+                }
+            }
+            return true
+        }
         lastX = x
         lastY = y
         val action = when (event.actionMasked) {
@@ -199,6 +238,15 @@ class MainActivity : Activity() {
         }
         thread { send(JSONObject().put("type", "mouse").put("x", x.toDouble()).put("y", y.toDouble()).put("action", action)) }
         return true
+    }
+
+    private fun setFullscreen(enabled: Boolean) {
+        fullScreen = enabled
+        settingsPanel.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+        window.decorView.systemUiVisibility = if (enabled)
+            (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
+        fullscreenButton.text = if (enabled) "Exit full screen" else "Full screen"
     }
 
     private fun disconnect() {
