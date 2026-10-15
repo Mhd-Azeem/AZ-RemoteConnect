@@ -70,10 +70,10 @@ public partial class MainWindow : Window
             ScreenView.Source = bitmap;
         }
     }
-    private async void ScreenView_MouseMove(object sender, MouseEventArgs e) { if (e.LeftButton == MouseButtonState.Pressed) await SendMouse("move",e); }
+    private async void ScreenView_MouseMove(object sender, System.Windows.Input.MouseEventArgs e) { if (e.LeftButton == MouseButtonState.Pressed) await SendMouse("move",e); }
     private async void ScreenView_MouseDown(object sender, MouseButtonEventArgs e) { if(e.ChangedButton == MouseButton.Left) await SendMouse("down",e); }
     private async void ScreenView_MouseUp(object sender, MouseButtonEventArgs e) { if(e.ChangedButton == MouseButton.Left) await SendMouse("up",e); }
-    private async Task SendMouse(string action, MouseEventArgs e)
+    private async Task SendMouse(string action, System.Windows.Input.MouseEventArgs e)
     {
         if (viewer == null || viewerStop == null) return;
         var p = e.GetPosition(ScreenView);
