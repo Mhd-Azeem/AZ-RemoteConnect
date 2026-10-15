@@ -144,7 +144,7 @@ internal sealed class LanHost : IAsyncDisposable
                          || format.Encoding == WaveFormatEncoding.Pcm && format.BitsPerSample == 16;
         if (supported)
         {
-            capture.DataAvailable += (_, args) =>
+            capture.DataAvailable += (sender, args) =>
             {
                 int sampleBytes = format.BitsPerSample / 8;
                 int samples = args.BytesRecorded / (sampleBytes * format.Channels);
