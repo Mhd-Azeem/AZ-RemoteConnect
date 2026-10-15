@@ -27,7 +27,7 @@ public partial class MainWindow : Window
             host = new LanHost(() => Dispatcher.InvokeAsync(() =>
                 System.Windows.MessageBox.Show(this, "A remote device wants to control this computer. Allow?", "Authorize remote access", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes).Task);
             host.Start();
-            HostDetails.Text = $"Listening on port 48765\nPairing code: {host.PairCode}\nTLS SHA-256 fingerprint:\n{host.Fingerprint}\nShare these securely with the controller.";
+            HostDetails.Text = $"Listening on port 48765\nPairing code: {host.PairCode}\nShort verification code: {host.VerificationCode}\nFull fingerprint (advanced):\n{host.Fingerprint}\nShare these securely with the controller.";
             Status.Text = "Hosting on the LAN; waiting for approval.";
         }
         catch (Exception ex) { Status.Text = ex.Message; if (host != null) { await host.DisposeAsync(); host = null; } }
@@ -36,8 +36,8 @@ public partial class MainWindow : Window
     {
         if (viewerStop != null) return;
         var expected = RemoteFingerprint.Text.Trim().Replace(":", "").Replace(" ", "").ToUpperInvariant();
-        if (expected.Length != 64 || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]{64}$"))
-        { Status.Text = "Enter the host's full SHA-256 TLS fingerprint."; return; }
+        if ((expected.Length != 12 && expected.Length != 64) || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]+$"))
+        { Status.Text = "Enter the host's 12-digit verification code or full TLS fingerprint."; return; }
         if (!int.TryParse(RemotePort.Text, out int port) || port is < 1 or > 65535) { Status.Text = "Invalid port"; return; }
         if (!System.Text.RegularExpressions.Regex.IsMatch(RemoteCode.Text.Trim(), "^[0-9]{6}$")) { Status.Text = "Invalid pairing code"; return; }
         viewerStop = new CancellationTokenSource();
@@ -45,15 +45,20 @@ public partial class MainWindow : Window
         {
             var client = new TcpClient();
             await client.ConnectAsync(RemoteHost.Text.Trim(), port, viewerStop.Token);
-            viewer = new SslStream(client.GetStream(), false, (_, cert, _, _) => cert != null && RemoteTransport.Fingerprint(cert) == expected);
+            viewer = new SslStream(client.GetStream(), false, (_, cert, _, _) => cert != null && RemoteTransport.Fingerprint(cert).StartsWith(expected, StringComparison.Ordinal));
             await viewer.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = "AZRemoteConnect-Temporary", EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 }, viewerStop.Token);
             await RemoteTransport.SendAsync(viewer, new { type = "pair", code = RemoteCode.Text.Trim() }, viewerStop.Token);
             using (var accepted = await RemoteTransport.ReadAsync(viewer, viewerStop.Token))
-                if (RemoteTransport.Field(accepted, "type") != "approved") throw new InvalidDataException("Connection not approved");
+                if (RemoteTransport.Field(accepted, "type") != "approved") {
+                    var reason = RemoteTransport.Field(accepted, "message");
+                    throw new InvalidDataException(string.IsNullOrWhiteSpace(reason) ? "Connection not approved. Check the host's sharing notification and pairing code." : reason);
+                }
             Status.Text = "Session approved — remote screen active.";
             EmptyScreen.Visibility = Visibility.Collapsed;
             await ReceiveFrames(viewer, viewerStop.Token);
         }
+        catch (EndOfStreamException) { Status.Text = "Host closed the connection before approval. Check that phone screen sharing is active and the host pairing code is correct."; }
+        catch (IOException ex) { Status.Text = $"Connection ended: {ex.Message}. Check the Android host sharing notification."; }
         catch (Exception ex) { Status.Text = $"Disconnected: {ex.Message}"; }
         finally { viewer?.Dispose(); viewer = null; viewerStop?.Dispose(); viewerStop = null; EmptyScreen.Visibility = Visibility.Visible; }
     }
