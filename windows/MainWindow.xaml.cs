@@ -49,11 +49,16 @@ public partial class MainWindow : Window
             await viewer.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = "AZRemoteConnect-Temporary", EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 }, viewerStop.Token);
             await RemoteTransport.SendAsync(viewer, new { type = "pair", code = RemoteCode.Text.Trim() }, viewerStop.Token);
             using (var accepted = await RemoteTransport.ReadAsync(viewer, viewerStop.Token))
-                if (RemoteTransport.Field(accepted, "type") != "approved") throw new InvalidDataException("Connection not approved");
+                if (RemoteTransport.Field(accepted, "type") != "approved") {
+                    var reason = RemoteTransport.Field(accepted, "message");
+                    throw new InvalidDataException(string.IsNullOrWhiteSpace(reason) ? "Connection not approved. Check the host's sharing notification and pairing code." : reason);
+                }
             Status.Text = "Session approved — remote screen active.";
             EmptyScreen.Visibility = Visibility.Collapsed;
             await ReceiveFrames(viewer, viewerStop.Token);
         }
+        catch (EndOfStreamException) { Status.Text = "Host closed the connection before approval. Check that phone screen sharing is active and the host pairing code is correct."; }
+        catch (IOException ex) { Status.Text = $"Connection ended: {ex.Message}. Check the Android host sharing notification."; }
         catch (Exception ex) { Status.Text = $"Disconnected: {ex.Message}"; }
         finally { viewer?.Dispose(); viewer = null; viewerStop?.Dispose(); viewerStop = null; EmptyScreen.Visibility = Visibility.Visible; }
     }
