@@ -36,8 +36,8 @@ public partial class MainWindow : Window
     {
         if (viewerStop != null) return;
         var expected = RemoteFingerprint.Text.Trim().Replace(":", "").Replace(" ", "").ToUpperInvariant();
-        if (expected.Length != 64 || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]{64}$"))
-        { Status.Text = "Enter the host's full SHA-256 TLS fingerprint."; return; }
+        if ((expected.Length != 12 && expected.Length != 64) || !System.Text.RegularExpressions.Regex.IsMatch(expected, "^[0-9A-F]+$"))
+        { Status.Text = "Enter the host's 12-digit verification code or full TLS fingerprint."; return; }
         if (!int.TryParse(RemotePort.Text, out int port) || port is < 1 or > 65535) { Status.Text = "Invalid port"; return; }
         if (!System.Text.RegularExpressions.Regex.IsMatch(RemoteCode.Text.Trim(), "^[0-9]{6}$")) { Status.Text = "Invalid pairing code"; return; }
         viewerStop = new CancellationTokenSource();
@@ -45,7 +45,7 @@ public partial class MainWindow : Window
         {
             var client = new TcpClient();
             await client.ConnectAsync(RemoteHost.Text.Trim(), port, viewerStop.Token);
-            viewer = new SslStream(client.GetStream(), false, (_, cert, _, _) => cert != null && RemoteTransport.Fingerprint(cert) == expected);
+            viewer = new SslStream(client.GetStream(), false, (_, cert, _, _) => cert != null && RemoteTransport.Fingerprint(cert).StartsWith(expected, StringComparison.Ordinal));
             await viewer.AuthenticateAsClientAsync(new SslClientAuthenticationOptions { TargetHost = "AZRemoteConnect-Temporary", EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 }, viewerStop.Token);
             await RemoteTransport.SendAsync(viewer, new { type = "pair", code = RemoteCode.Text.Trim() }, viewerStop.Token);
             using (var accepted = await RemoteTransport.ReadAsync(viewer, viewerStop.Token))
