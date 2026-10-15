@@ -2,6 +2,13 @@ package com.azeem.azremoteconnect
 
 import android.app.Activity
 import android.os.Bundle
+import android.content.Intent
+import android.provider.Settings
+import android.media.projection.MediaProjectionManager
+import android.content.Context
+import android.os.Build
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.content.pm.ActivityInfo
 import android.media.AudioTrack
 import android.media.AudioAttributes
@@ -35,6 +42,8 @@ class MainActivity : Activity() {
     private lateinit var connectButton: Button
     private lateinit var keyboardInput: EditText
     private lateinit var settingsPanel: LinearLayout
+    private lateinit var hostDetails: TextView
+    private val projectionRequest = 7312
     private lateinit var fullscreenButton: Button
     private lateinit var audioButton: Button
     @Volatile private var audioEnabled = true
@@ -78,6 +87,26 @@ class MainActivity : Activity() {
         settingsPanel.setPadding(12, 8, 12, 8)
         settingsPanel.background = GradientDrawable().apply { setColor(Color.rgb(25,34,52)); cornerRadius = 22f }
         rootLayout.addView(settingsPanel)
+        val hosting = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        hosting.addView(Button(this).apply {
+            text = "Share this phone"
+            setOnClickListener {
+                if (RemoteAccessibility.instance == null) {
+                    Toast.makeText(this@MainActivity, "Enable AZ RemoteConnect accessibility service for remote touch", Toast.LENGTH_LONG).show()
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } else {
+                    val projection = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    startActivityForResult(projection.createScreenCaptureIntent(), projectionRequest)
+                }
+            }
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        hosting.addView(Button(this).apply {
+            text = "Stop sharing"
+            setOnClickListener { startService(Intent(this@MainActivity, AndroidHostService::class.java).setAction(AndroidHostService.ACTION_STOP)) }
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        rootLayout.addView(hosting)
+        hostDetails = label("Host this phone: enable accessibility and approve screen capture.").apply { textSize = 12f }
+        rootLayout.addView(hostDetails)
         val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
         val disconnect = Button(this).apply { text = "Disconnect"; setOnClickListener { disconnect() } }
@@ -141,6 +170,35 @@ class MainActivity : Activity() {
         rootLayout.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
         rootLayout.addView(label("Pairing approval required. Tap, drag, right click, keyboard and scroll. Fast JPEG is best-effort, not guaranteed 60 FPS."))
         setContentView(rootLayout)
+        // Respect status/navigation bars in normal mode (Android 15 edge-to-edge).
+        if (Build.VERSION.SDK_INT >= 35) {
+            window.decorView.setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                if (!fullScreen) rootLayout.setPadding(16 + bars.left, 14 + bars.top, 16 + bars.right, 10 + bars.bottom)
+                else rootLayout.setPadding(0, 0, 0, 0)
+                insets
+            }
+            window.decorView.requestApplyInsets()
+        }
+    }
+
+    @Deprecated("Uses Activity result for Android MediaProjection authorization")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == projectionRequest && resultCode == Activity.RESULT_OK && data != null) {
+            val intent = Intent(this, AndroidHostService::class.java)
+                .setAction(AndroidHostService.ACTION_START)
+                .putExtra(AndroidHostService.EXTRA_RESULT, resultCode)
+                .putExtra(AndroidHostService.EXTRA_DATA, data)
+            startForegroundService(intent)
+            hostDetails.text = "Hosting enabled. Confirm pairing and verification code in the host notification."
+        }
+    }
+    override fun onResume() {
+        super.onResume()
+        if (::hostDetails.isInitialized && AndroidHostService.active) {
+            hostDetails.text = "Phone host • Pair: ${AndroidHostService.code} • Verify: ${AndroidHostService.verification} • Port 48765"
+        }
     }
 
     private fun info(message: String) = runOnUiThread { status.text = message }
@@ -313,8 +371,9 @@ class MainActivity : Activity() {
                 or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
         fullscreenButton.text = if (enabled) "Exit full screen" else "Full screen"
         screen.scaleType = ImageView.ScaleType.FIT_CENTER
-        rootLayout.setPadding(if (enabled) 0 else 16, if (enabled) 0 else 14,
-            if (enabled) 0 else 16, if (enabled) 0 else 10)
+        if (enabled) rootLayout.setPadding(0, 0, 0, 0)
+        else if (Build.VERSION.SDK_INT >= 35) window.decorView.requestApplyInsets()
+        else rootLayout.setPadding(16, 14, 16, 10)
     }
 
     private fun disconnect() {
