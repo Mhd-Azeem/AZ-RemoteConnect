@@ -12,4 +12,5 @@
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
+  <ItemGroup><Resource Include="azremoteconnect-logo.png" /></ItemGroup>
 </Project>
