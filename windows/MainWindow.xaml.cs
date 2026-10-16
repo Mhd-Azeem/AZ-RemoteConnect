@@ -289,8 +289,16 @@ public partial class MainWindow : Window
             System.Windows.Media.Color.FromRgb(4, 100, 222) : System.Windows.Media.Color.FromRgb(10, 55, 112));
         PreviewHint.Text = touchpadMode ? "Touchpad: drag and release to click" : "Screen Touch: click where you want to tap";
     }
-    private void TouchMode_Click(object sender, RoutedEventArgs e) { touchpadMode = false; UpdateMode(); }
-    private void TouchpadMode_Click(object sender, RoutedEventArgs e) { touchpadMode = true; UpdateMode(); }
+    private void TouchMode_Click(object sender, RoutedEventArgs e)
+    {
+        touchpadMode = false; UpdateMode();
+        SetStatus("Screen Touch selected. Android host must have explicitly enabled remote-touch access.");
+    }
+    private void TouchpadMode_Click(object sender, RoutedEventArgs e)
+    {
+        touchpadMode = true; UpdateMode();
+        SetStatus("Touchpad selected. Remote gestures require the Full Android edition and consent.");
+    }
 
     private async Task SendRemote(object packet)
     {
@@ -303,34 +311,36 @@ public partial class MainWindow : Window
         finally { sendLock.Release(); }
     }
 
-    private bool TryPoint(MouseEventArgs e, out double x, out double y)
+    private bool TryPoint(System.Windows.Controls.Image view, MouseEventArgs e, out double x, out double y)
     {
-        var p = e.GetPosition(ScreenView);
+        var p = e.GetPosition(view);
         x = 0; y = 0;
-        if (ScreenView.Source is not BitmapSource source || ScreenView.ActualWidth <= 0 || ScreenView.ActualHeight <= 0) return false;
-        // WPF Image.Stretch=Uniform preserves aspect ratio with letterboxing.
-        var scale = Math.Min(ScreenView.ActualWidth / source.PixelWidth, ScreenView.ActualHeight / source.PixelHeight);
+        if (view.Source is not BitmapSource source || view.ActualWidth <= 0 || view.ActualHeight <= 0) return false;
+        // WPF Image.Stretch=Uniform preserves the remote display ratio, with letterboxing.
+        var scale = Math.Min(view.ActualWidth / source.PixelWidth, view.ActualHeight / source.PixelHeight);
         var drawnWidth = source.PixelWidth * scale;
         var drawnHeight = source.PixelHeight * scale;
-        x = (p.X - (ScreenView.ActualWidth - drawnWidth) / 2d) / drawnWidth;
-        y = (p.Y - (ScreenView.ActualHeight - drawnHeight) / 2d) / drawnHeight;
+        x = (p.X - (view.ActualWidth - drawnWidth) / 2d) / drawnWidth;
+        y = (p.Y - (view.ActualHeight - drawnHeight) / 2d) / drawnHeight;
         return x is >= 0 and <= 1 && y is >= 0 and <= 1;
     }
 
     private async void ScreenView_MouseDown(object sender, MouseButtonEventArgs e)
     {
         if (viewer == null || e.ChangedButton != MouseButton.Left) return;
-        ScreenView.Focus();
-        var p = e.GetPosition(ScreenView);
+        var view = sender as System.Windows.Controls.Image ?? ScreenView;
+        view.Focus();
+        var p = e.GetPosition(view);
         lastPointer = p;
-        if (!touchpadMode && TryPoint(e, out var x, out var y))
+        if (!touchpadMode && TryPoint(view, e, out var x, out var y))
             await SendRemote(new { type = "mouse", x, y, action = "down" });
-        ScreenView.CaptureMouse();
+        view.CaptureMouse();
     }
     private async void ScreenView_MouseMove(object sender, MouseEventArgs e)
     {
         if (viewer == null || e.LeftButton != MouseButtonState.Pressed || !lastPointer.HasValue) return;
-        var now = e.GetPosition(ScreenView);
+        var view = sender as System.Windows.Controls.Image ?? ScreenView;
+        var now = e.GetPosition(view);
         if (touchpadMode)
         {
             var dx = now.X - lastPointer.Value.X;
@@ -338,18 +348,19 @@ public partial class MainWindow : Window
             if (Math.Abs(dx) + Math.Abs(dy) > 0.5)
                 await SendRemote(new { type = "relative", dx = dx * 1.4, dy = dy * 1.4 });
         }
-        else if (TryPoint(e, out var x, out var y))
+        else if (TryPoint(view, e, out var x, out var y))
             await SendRemote(new { type = "mouse", x, y, action = "move" });
         lastPointer = now;
     }
     private async void ScreenView_MouseUp(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton != MouseButton.Left) return;
-        ScreenView.ReleaseMouseCapture();
+        var view = sender as System.Windows.Controls.Image ?? ScreenView;
+        view.ReleaseMouseCapture();
         if (viewer == null) { lastPointer = null; return; }
         if (touchpadMode)
             await SendRemote(new { type = "click", button = "left" });
-        else if (TryPoint(e, out var x, out var y))
+        else if (TryPoint(view, e, out var x, out var y))
             await SendRemote(new { type = "mouse", x, y, action = "up" });
         lastPointer = null;
     }
@@ -378,7 +389,12 @@ public partial class MainWindow : Window
             Owner = this,
             Content = image
         };
-        image.MouseDown += (_, ev) => { if (ev.ClickCount == 2) fullscreenWindow?.Close(); };
+        image.MouseDown += (source, ev) => {
+            if (ev.ClickCount == 2) { fullscreenWindow?.Close(); return; }
+            ScreenView_MouseDown(source, ev);
+        };
+        image.MouseMove += ScreenView_MouseMove;
+        image.MouseUp += ScreenView_MouseUp;
         fullscreenWindow.KeyDown += (_, ev) => { if (ev.Key == Key.Escape) fullscreenWindow?.Close(); };
         fullscreenWindow.Closed += (_, _) => fullscreenWindow = null;
         fullscreenWindow.Show();
