@@ -169,16 +169,37 @@ class AndroidHostService : Service() {
     }
     private fun serve() {
         try {
+            hostStatus = "Initializing TLS host certificate"
             val factory = makeTls()
-            server = factory.createServerSocket(48765)
+            val listener = factory.createServerSocket(48765)
+            server = listener
+            code = (100000 + SecureRandom().nextInt(900000)).toString()
+            active = true
+            accepting.set(true)
+            starting.set(false)
+            hostStatus = "Ready for incoming connections on port 48765"
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(42, notice("Code: $code • Verify: $verification • " +
+                .notify(42, notice("Code: $code • " +
                     (if (touchAllowedForSession) "Screen + touch" else "Screen view only")))
             while (accepting.get()) {
-                val client = server?.accept() as? SSLSocket ?: break
-                Thread({ handle(client) }, "az-android-client").start()
+                val client = listener.accept() as? SSLSocket ?: break
+                if (!sessionBusy.compareAndSet(false, true)) {
+                    try { client.close() } catch (_: Exception) {}
+                    continue
+                }
+                Thread({
+                    try { handle(client) }
+                    finally { activeClient = false; sessionBusy.set(false) }
+                }, "az-android-client").start()
             }
-        } catch (e: Exception) { hostError = "Host server: ${e.javaClass.simpleName}: ${e.message}"; android.util.Log.e("AZRemoteHost", hostError, e); active = false }
+        } catch (e: Exception) {
+            if (starting.get() || accepting.get()) failure("Host listener or TLS", e)
+            active = false
+            starting.set(false)
+            accepting.set(false)
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(42, notice("Host failed • open app and tap Refresh code"))
+        }
     }
     private fun handle(client: SSLSocket) {
         client.use { ssl ->
