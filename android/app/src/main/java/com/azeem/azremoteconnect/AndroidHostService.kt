@@ -33,7 +33,6 @@ class AndroidHostService : Service() {
         const val EXTRA_ALLOW_REMOTE_TOUCH = "allowRemoteTouch"
         const val CHANNEL = "az_remote_host"
         @Volatile var code = ""
-        @Volatile var verification = ""
         @Volatile var active = false
         @Volatile var hostError = ""
         @Volatile var hostStatus = "Not sharing"
@@ -106,7 +105,6 @@ class AndroidHostService : Service() {
         hostStatus = "Preparing Android screen sharing"
         rejectedPairs.set(0)
         code = ""
-        verification = ""
         touchAllowedForSession = intent?.getBooleanExtra(EXTRA_ALLOW_REMOTE_TOUCH, false) == true &&
             RemoteAccessibility.instance != null
         startForeground(42, notice("Preparing Android screen sharing"),
@@ -163,8 +161,6 @@ class AndroidHostService : Service() {
             ?: throw IllegalStateException("Android TLS host certificate is unavailable")
         if (store.getKey(alias, null) == null)
             throw IllegalStateException("Android TLS private key is unavailable")
-        verification = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
-            .joinToString("") { "%02X".format(it) }.take(6)
         val km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         km.init(store, null)
         return SSLContext.getInstance("TLS").apply { init(km.keyManagers, null, SecureRandom()) }.serverSocketFactory
