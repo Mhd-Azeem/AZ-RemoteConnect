@@ -44,6 +44,7 @@ class MainActivity : Activity() {
     private lateinit var settingsPanel: LinearLayout
     private lateinit var hostDetails: TextView
     private val projectionRequest = 7312
+    private var remoteTouchConsentForNextSession = false
     private lateinit var fullscreenButton: Button
     private lateinit var audioButton: Button
     @Volatile private var audioEnabled = true
@@ -90,26 +91,25 @@ class MainActivity : Activity() {
         val hosting = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         hosting.addView(Button(this).apply {
             text = "Share this phone"
-            setOnClickListener {
-                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
-                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 811)
-                    Toast.makeText(this@MainActivity, "Allow notifications to receive connection approvals, then tap Share again", Toast.LENGTH_LONG).show()
-                } else if (RemoteAccessibility.instance == null) {
-                    Toast.makeText(this@MainActivity, "Enable AZ RemoteConnect accessibility service for remote touch", Toast.LENGTH_LONG).show()
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                } else {
-                    val projection = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                    startActivityForResult(projection.createScreenCaptureIntent(), projectionRequest)
-                }
-            }
+            setOnClickListener { showScreenShareDisclosure() }
         }, LinearLayout.LayoutParams(0, -2, 1f))
         hosting.addView(Button(this).apply {
             text = "Stop sharing"
             setOnClickListener { startService(Intent(this@MainActivity, AndroidHostService::class.java).setAction(AndroidHostService.ACTION_STOP)) }
         }, LinearLayout.LayoutParams(0, -2, 1f))
         rootLayout.addView(hosting)
-        hostDetails = label("Host this phone: enable accessibility and approve screen capture.").apply { textSize = 12f }
+        if (BuildConfig.FLAVOR == "full") {
+            rootLayout.addView(Button(this).apply {
+                text = "Enable remote touch (optional)"
+                setOnClickListener { showRemoteTouchDisclosure() }
+            })
+        } else {
+            rootLayout.addView(label("Viewer edition: screen sharing and remote viewing only; no Accessibility permission.").apply {
+                textSize = 12f
+                setPadding(8, 4, 8, 8)
+            })
+        }
+        hostDetails = label("Sharing is off. Screen sharing does not require Accessibility access.").apply { textSize = 12f }
         rootLayout.addView(hostDetails)
         rootLayout.addView(Button(this).apply {
             text = "Refresh host code"
@@ -214,6 +214,62 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun showScreenShareDisclosure() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Share your phone screen?")
+            .setMessage(
+                "AZ RemoteConnect will capture what is visible on this phone, including " +
+                "apps, messages and potentially sensitive information. Your screen will be " +
+                "sent live over the encrypted connection to a device you explicitly approve " +
+                "using the pairing code. The other person may record what they see. " +
+                "Screen sharing is optional and can be stopped from the notification or app. " +
+                "It does not require Accessibility access."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Continue") { _, _ ->
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                        android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 811)
+                    Toast.makeText(this, "Allow notifications for pairing approval, then tap Share again.",
+                        Toast.LENGTH_LONG).show()
+                } else {
+                    val manager = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+                    startActivityForResult(manager.createScreenCaptureIntent(), projectionRequest)
+                }
+            }.show()
+    }
+
+    private fun showRemoteTouchDisclosure() {
+        if (BuildConfig.FLAVOR != "full") return
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Optional Accessibility access for remote touch")
+            .setMessage(
+                "To let an approved remote device tap or swipe on this Android phone, " +
+                "AZ RemoteConnect uses an Android Accessibility service. " +
+                "Android may allow this service to observe interface content. This app's " +
+                "service uses the API to dispatch touch gestures; it does not read or upload " +
+                "text from Accessibility events. The approved remote controller can interact " +
+                "with your phone and may see private content through screen sharing. " +
+                "Enable this only for people you trust. You can leave it off and share your " +
+                "screen in view-only mode, stop sharing, or disable the service in Android Settings."
+            )
+            .setNegativeButton("No, view only") { _, _ ->
+                remoteTouchConsentForNextSession = false
+            }
+            .setPositiveButton("I agree: enable touch") { _, _ ->
+                remoteTouchConsentForNextSession = true
+                if (RemoteAccessibility.instance == null) {
+                    Toast.makeText(this, "Enable AZ RemoteConnect in Accessibility settings, then return and tap Share.",
+                        Toast.LENGTH_LONG).show()
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } else {
+                    Toast.makeText(this, "Touch enabled for your next approved sharing session.",
+                        Toast.LENGTH_LONG).show()
+                }
+            }.show()
+    }
+
     @Deprecated("Uses Activity result for Android MediaProjection authorization")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
@@ -222,8 +278,13 @@ class MainActivity : Activity() {
                 .setAction(AndroidHostService.ACTION_START)
                 .putExtra(AndroidHostService.EXTRA_RESULT, resultCode)
                 .putExtra(AndroidHostService.EXTRA_DATA, data)
+                .putExtra(AndroidHostService.EXTRA_ALLOW_REMOTE_TOUCH,
+                    BuildConfig.FLAVOR == "full" && remoteTouchConsentForNextSession && RemoteAccessibility.instance != null)
             startForegroundService(intent)
+            remoteTouchConsentForNextSession = false
             hostDetails.text = "Hosting enabled. Confirm pairing and verification code in the host notification."
+        } else if (requestCode == projectionRequest) {
+            remoteTouchConsentForNextSession = false
         }
     }
     override fun onResume() {
