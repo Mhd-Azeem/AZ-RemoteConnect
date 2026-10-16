@@ -30,6 +30,7 @@ class AndroidHostService : Service() {
         const val ACTION_REJECT = "com.azeem.azremoteconnect.HOST_REJECT"
         const val EXTRA_RESULT = "projectionResult"
         const val EXTRA_DATA = "projectionData"
+        const val EXTRA_ALLOW_REMOTE_TOUCH = "allowRemoteTouch"
         const val CHANNEL = "az_remote_host"
         @Volatile var code = ""
         @Volatile var verification = ""
@@ -44,6 +45,7 @@ class AndroidHostService : Service() {
     @Volatile private var approved: Boolean? = null
     private val approvalLock = Object()
     private var frameWidth = 0
+    private var touchAllowedForSession = false
     private var frameHeight = 0
     private var pointerX = 0.5f
     private var pointerY = 0.5f
@@ -87,6 +89,8 @@ class AndroidHostService : Service() {
             }
         }
         if (active) return START_NOT_STICKY
+        touchAllowedForSession = intent?.getBooleanExtra(EXTRA_ALLOW_REMOTE_TOUCH, false) == true &&
+            RemoteAccessibility.instance != null
         startForeground(42, notice("Preparing Android screen sharing"),
             android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         try {
@@ -147,7 +151,8 @@ class AndroidHostService : Service() {
             val factory = makeTls()
             server = factory.createServerSocket(48765)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(42, notice("Code: $code • Verify: $verification • Port 48765"))
+                .notify(42, notice("Code: $code • Verify: $verification • " +
+                    (if (touchAllowedForSession) "Screen + touch" else "Screen view only")))
             while (accepting.get()) {
                 val client = server?.accept() as? SSLSocket ?: break
                 Thread({ handle(client) }, "az-android-client").start()
@@ -168,7 +173,7 @@ class AndroidHostService : Service() {
                 }
                 synchronized(approvalLock) { approved = null }
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                    .notify(42, notice("Remote device requests control • approve or deny", true))
+                    .notify(42, notice(if (touchAllowedForSession) "Request: screen + remote touch" else "Request: view screen only", true))
                 synchronized(approvalLock) {
                     val until = System.currentTimeMillis() + 30000
                     while (approved == null && System.currentTimeMillis() < until)
@@ -185,7 +190,8 @@ class AndroidHostService : Service() {
                     try {
                         while (active && !ssl.isClosed) {
                             val command = read(input)
-                            val service = RemoteAccessibility.instance ?: continue
+                            val service = if (touchAllowedForSession) RemoteAccessibility.instance else null
+                            if (service == null) continue
                             val kind = command.optString("type")
                             val x = command.optDouble("x", 0.5).coerceIn(0.0, 1.0).toFloat() * frameWidth
                             val y = command.optDouble("y", 0.5).coerceIn(0.0, 1.0).toFloat() * frameHeight
@@ -238,6 +244,7 @@ class AndroidHostService : Service() {
     }
     override fun onDestroy() {
         active = false; accepting.set(false)
+        touchAllowedForSession = false
         try { server?.close() } catch (_: Exception) {}
         display?.release(); reader?.close(); projection?.stop()
         super.onDestroy()

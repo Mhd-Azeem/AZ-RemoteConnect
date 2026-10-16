@@ -31,10 +31,15 @@ jobs:
           gradle-version: '8.11.1'
       - name: Install SDK Platform
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - name: Build debug APK
-        run: gradle -p android --no-daemon assembleDebug
+      - name: Build safer viewer APK and full-capability AAB (unsigned without signing key)
+        run: gradle -p android --no-daemon assembleViewerDebug bundleFullRelease
       - uses: actions/upload-artifact@v4
         with:
-          name: AZ-RemoteConnect-Android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: AZ-RemoteConnect-Viewer-debug
+          path: android/app/build/outputs/apk/viewer/debug/app-viewer-debug.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AZ-RemoteConnect-Full-AAB-unsigned
+          path: android/app/build/outputs/bundle/fullRelease/app-full-release.aab
           if-no-files-found: error
