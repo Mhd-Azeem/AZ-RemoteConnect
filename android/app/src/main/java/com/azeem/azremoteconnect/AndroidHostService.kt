@@ -143,19 +143,26 @@ class AndroidHostService : Service() {
         return START_NOT_STICKY
     }
     private fun makeTls(): SSLServerSocketFactory {
+        // RSA 2048 server identity offers broad compatibility with Windows SChannel and
+        // Android TLS providers. Keep the private key in AndroidKeyStore, never export it.
+        // v2 identity is intentionally distinct from the older EC identity.
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val alias = "AZRemoteConnectHost"
+        val alias = "AZRemoteConnectHostTLSv2"
         if (!store.containsAlias(alias)) {
-            val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
-            generator.initialize(KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+            val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore")
+            generator.initialize(KeyGenParameterSpec.Builder(alias,
+                KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
+                .setKeySize(2048)
                 .setDigests(KeyProperties.DIGEST_SHA256)
+                .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
                 .setCertificateSubject(javax.security.auth.x500.X500Principal("CN=AZRemoteConnect-Temporary"))
                 .build())
             generator.generateKeyPair()
         }
         val cert = store.getCertificate(alias)
             ?: throw IllegalStateException("Android TLS host certificate is unavailable")
-        if (store.getKey(alias, null) == null) throw IllegalStateException("Android TLS private key is unavailable")
+        if (store.getKey(alias, null) == null)
+            throw IllegalStateException("Android TLS private key is unavailable")
         verification = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString("") { "%02X".format(it) }.take(6)
         val km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
@@ -213,6 +220,8 @@ class AndroidHostService : Service() {
             try {
                 ssl.soTimeout = 30000
                 ssl.startHandshake()
+                // A failed TLS negotiation occurs before code verification and before approval.
+                hostError = ""
                 stage = "Pairing code"
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 val output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
@@ -282,7 +291,14 @@ class AndroidHostService : Service() {
                     Thread.sleep(8)
                 }
             } catch (e: Exception) {
-                failure(stage, e)
+                if (stage == "TLS handshake") {
+                    hostError = "A connecting device closed or failed the encrypted handshake. " +
+                        "Check that both devices use the latest release, share a reachable Wi-Fi/hotspot " +
+                        "or private VPN address, and that TCP 48765 is not blocked. " +
+                        "See the controlling device's error details."
+                    hostStatus = hostError
+                    android.util.Log.w("AZRemoteHost", "TLS negotiation aborted by remote peer", e)
+                } else failure(stage, e)
             } finally {
                 activeClient = false
                 synchronized(approvalLock) { pendingApproval = false; approvalLock.notifyAll() }
