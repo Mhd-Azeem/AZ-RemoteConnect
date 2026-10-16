@@ -274,9 +274,7 @@ class MainActivity : Activity() {
         hostDetails = textLine("Screen sharing is off; Accessibility is not required for viewing.", 12f, true)
         hostCard.addView(hostDetails)
         hostCard.addView(blueButton("Refresh phone host code") {
-            hostDetails.text = if (AndroidHostService.active)
-                "Phone hosting  •  Pair: " + AndroidHostService.code + "  •  Verify: " + AndroidHostService.verification
-            else "Phone host is off. " + AndroidHostService.hostError
+            hostDetails.text = phoneHostInfo()
         }, LinearLayout.LayoutParams(-1, dp(45)))
         dashboardPage.addView(hostCard)
 
@@ -394,6 +392,33 @@ class MainActivity : Activity() {
             .showSoftInput(keyboardInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
     }
 
+    private fun phoneHostInfo(): String {
+        val service = AndroidHostService
+        if (!service.active) {
+            return "Phone host not ready • " + service.hostStatus +
+                if (service.hostError.isBlank()) "" else "\\n" + service.hostError
+        }
+        val lanIp = try {
+            val all = java.net.NetworkInterface.getNetworkInterfaces()
+            val found = mutableListOf<String>()
+            while (all.hasMoreElements()) {
+                val adapter = all.nextElement()
+                if (!adapter.isUp || adapter.isLoopback) continue
+                val ipAddresses = adapter.inetAddresses
+                while (ipAddresses.hasMoreElements()) {
+                    val address = ipAddresses.nextElement()
+                    if (address is java.net.Inet4Address && !address.isLoopbackAddress)
+                        found.add(address.hostAddress ?: "")
+                }
+            }
+            found.distinct().joinToString(", ")
+        } catch (_: Exception) { "check your hotspot gateway IP" }
+        return "READY • Phone IP: $lanIp • Port: 48765\\n" +
+            "Temporary 6-digit pairing code: " + service.code +
+            "\\n" + (if (service.activeClient) "Connected to a viewer" else "Waiting for host approval request") +
+            if (service.hostError.isBlank()) "" else "\\nLast session error: " + service.hostError
+    }
+
     private fun showScreenShareDisclosure() {
         android.app.AlertDialog.Builder(this)
             .setTitle("Share your phone screen?")
@@ -462,16 +487,14 @@ class MainActivity : Activity() {
                     BuildConfig.FLAVOR == "full" && remoteTouchConsentForNextSession && RemoteAccessibility.instance != null)
             startForegroundService(intent)
             remoteTouchConsentForNextSession = false
-            hostDetails.text = "Hosting enabled. Confirm pairing and verification code in the host notification."
+            hostDetails.text = "Preparing secure host. Wait a moment, then tap Refresh phone host code. Do not connect until READY appears."
         } else if (requestCode == projectionRequest) {
             remoteTouchConsentForNextSession = false
         }
     }
     override fun onResume() {
         super.onResume()
-        if (::hostDetails.isInitialized && AndroidHostService.active) {
-            hostDetails.text = "Phone host • Pair: ${AndroidHostService.code} • Verify: ${AndroidHostService.verification} • Port 48765"
-        }
+        if (::hostDetails.isInitialized) hostDetails.text = phoneHostInfo()
     }
 
     private fun info(message: String) = runOnUiThread {

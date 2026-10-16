@@ -36,12 +36,17 @@ class AndroidHostService : Service() {
         @Volatile var verification = ""
         @Volatile var active = false
         @Volatile var hostError = ""
+        @Volatile var hostStatus = "Not sharing"
+        @Volatile var activeClient = false
     }
     private var server: ServerSocket? = null
     private var projection: MediaProjection? = null
     private var reader: ImageReader? = null
     private var display: android.hardware.display.VirtualDisplay? = null
     private val accepting = AtomicBoolean(false)
+    private val starting = AtomicBoolean(false)
+    private val sessionBusy = AtomicBoolean(false)
+    @Volatile private var pendingApproval = false
     @Volatile private var approved: Boolean? = null
     private val approvalLock = Object()
     private var frameWidth = 0
@@ -50,6 +55,11 @@ class AndroidHostService : Service() {
     private var pointerX = 0.5f
     private var pointerY = 0.5f
     private val rejectedPairs = java.util.concurrent.atomic.AtomicInteger(0)
+    private fun failure(phase: String, error: Exception) {
+        hostError = "$phase: ${error.javaClass.simpleName}: ${error.message}"
+        hostStatus = hostError
+        android.util.Log.e("AZRemoteHost", hostError, error)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -81,7 +91,9 @@ class AndroidHostService : Service() {
             ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
             ACTION_APPROVE, ACTION_REJECT -> {
                 synchronized(approvalLock) {
+                    if (!pendingApproval) return START_NOT_STICKY
                     approved = intent.action == ACTION_APPROVE
+                    pendingApproval = false
                     approvalLock.notifyAll()
                 }
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
@@ -89,7 +101,12 @@ class AndroidHostService : Service() {
                 return START_NOT_STICKY
             }
         }
-        if (active) return START_NOT_STICKY
+        if (active || !starting.compareAndSet(false, true)) return START_NOT_STICKY
+        hostError = ""
+        hostStatus = "Preparing Android screen sharing"
+        rejectedPairs.set(0)
+        code = ""
+        verification = ""
         touchAllowedForSession = intent?.getBooleanExtra(EXTRA_ALLOW_REMOTE_TOUCH, false) == true &&
             RemoteAccessibility.instance != null
         startForeground(42, notice("Preparing Android screen sharing"),
@@ -109,15 +126,20 @@ class AndroidHostService : Service() {
             frameHeight = metrics.heightPixels
             reader = ImageReader.newInstance(frameWidth, frameHeight, android.graphics.PixelFormat.RGBA_8888, 2)
             projection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { stopSelf() }
+                override fun onStop() {
+                    hostError = "Android ended screen capture. Start a new sharing session."
+                    hostStatus = hostError
+                    stopSelf()
+                }
             }, Handler(Looper.getMainLooper()))
             display = projection?.createVirtualDisplay("AZ remote screen", frameWidth, frameHeight, metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader?.surface, null, null)
-            code = (100000 + SecureRandom().nextInt(900000)).toString()
-            active = true
-            accepting.set(true)
             Thread({ serve() }, "az-android-host").start()
-        } catch (e: Exception) { hostError = "Screen capture start: ${e.javaClass.simpleName}: ${e.message}"; android.util.Log.e("AZRemoteHost", hostError, e); stopSelf() }
+        } catch (e: Exception) {
+            starting.set(false)
+            failure("Screen capture setup", e)
+            stopSelf()
+        }
         return START_NOT_STICKY
     }
     private fun makeTls(): SSLServerSocketFactory {
@@ -132,6 +154,8 @@ class AndroidHostService : Service() {
             generator.generateKeyPair()
         }
         val cert = store.getCertificate(alias)
+            ?: throw IllegalStateException("Android TLS host certificate is unavailable")
+        if (store.getKey(alias, null) == null) throw IllegalStateException("Android TLS private key is unavailable")
         verification = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
             .joinToString("") { "%02X".format(it) }.take(6)
         val km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
@@ -149,22 +173,47 @@ class AndroidHostService : Service() {
     }
     private fun serve() {
         try {
+            hostStatus = "Initializing TLS host certificate"
             val factory = makeTls()
-            server = factory.createServerSocket(48765)
+            val listener = factory.createServerSocket(48765)
+            server = listener
+            code = (100000 + SecureRandom().nextInt(900000)).toString()
+            active = true
+            accepting.set(true)
+            starting.set(false)
+            hostStatus = "Ready for incoming connections on port 48765"
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(42, notice("Code: $code • Verify: $verification • " +
+                .notify(42, notice("Code: $code • " +
                     (if (touchAllowedForSession) "Screen + touch" else "Screen view only")))
             while (accepting.get()) {
-                val client = server?.accept() as? SSLSocket ?: break
-                Thread({ handle(client) }, "az-android-client").start()
+                val client = listener.accept() as? SSLSocket ?: break
+                if (!sessionBusy.compareAndSet(false, true)) {
+                    try { client.close() } catch (_: Exception) {}
+                    continue
+                }
+                Thread({
+                    try { handle(client) }
+                    finally { activeClient = false; sessionBusy.set(false) }
+                }, "az-android-client").start()
             }
-        } catch (e: Exception) { hostError = "Host server: ${e.javaClass.simpleName}: ${e.message}"; android.util.Log.e("AZRemoteHost", hostError, e); active = false }
+        } catch (e: Exception) {
+            if (starting.get() || accepting.get()) failure("Host listener or TLS", e)
+            active = false
+            starting.set(false)
+            accepting.set(false)
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(42, notice("Host failed • open app and tap Refresh code"))
+            // Failed TLS or socket setup must not leave MediaProjection capturing in the background.
+            Handler(Looper.getMainLooper()).post { stopSelf() }
+        }
     }
     private fun handle(client: SSLSocket) {
+        var stage = "TLS handshake"
         client.use { ssl ->
             try {
                 ssl.soTimeout = 30000
                 ssl.startHandshake()
+                stage = "Pairing code"
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 val output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 val pair = read(input)
@@ -173,21 +222,31 @@ class AndroidHostService : Service() {
                     send(output, JSONObject().put("type", "error").put("message", "Incorrect pairing code"))
                     return
                 }
-                synchronized(approvalLock) { approved = null }
+                stage = "Phone-side approval"
+                synchronized(approvalLock) {
+                    approved = null
+                    pendingApproval = true
+                }
+                hostStatus = "Awaiting approval on phone notification"
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(42, notice(if (touchAllowedForSession) "Request: screen + remote touch" else "Request: view screen only", true))
                 synchronized(approvalLock) {
-                    val until = System.currentTimeMillis() + 30000
+                    val until = System.currentTimeMillis() + 45000
                     while (approved == null && System.currentTimeMillis() < until)
                         approvalLock.wait((until - System.currentTimeMillis()).coerceAtLeast(1))
                     if (approved != true) {
+                        pendingApproval = false
                         send(output, JSONObject().put("type", "error").put("message",
-                            if (approved == false) "Host denied access" else "Host approval timed out"))
+                            if (approved == false) "Phone denied access" else "Phone approval timed out after 45 seconds"))
                         return
                     }
                 }
+                pendingApproval = false
                 ssl.soTimeout = 0
+                stage = "Screen capture streaming"
                 send(output, JSONObject().put("type", "approved"))
+                activeClient = true
+                hostStatus = "Approved • streaming to remote viewer"
                 Thread({
                     try {
                         while (active && !ssl.isClosed) {
@@ -223,8 +282,14 @@ class AndroidHostService : Service() {
                     Thread.sleep(8)
                 }
             } catch (e: Exception) {
-                hostError = "Session: ${e.javaClass.simpleName}: ${e.message}"
-                android.util.Log.e("AZRemoteHost", hostError, e)
+                failure(stage, e)
+            } finally {
+                activeClient = false
+                synchronized(approvalLock) { pendingApproval = false; approvalLock.notifyAll() }
+                if (active) {
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                        .notify(42, notice("Code: $code • Waiting for a viewer"))
+                }
             }
         }
     }
@@ -247,6 +312,10 @@ class AndroidHostService : Service() {
     }
     override fun onDestroy() {
         active = false; accepting.set(false)
+        starting.set(false)
+        activeClient = false
+        pendingApproval = false
+        hostStatus = "Sharing stopped"
         code = ""
         touchAllowedForSession = false
         try { server?.close() } catch (_: Exception) {}
