@@ -56,6 +56,8 @@ class MainActivity : Activity() {
     private lateinit var remotePage: FrameLayout
     private lateinit var dashboardPage: LinearLayout
     private lateinit var sessionStatus: TextView
+    private lateinit var sessionTopBar: LinearLayout
+    private lateinit var sessionBottomBar: LinearLayout
     private lateinit var deviceStatus: TextView
     private lateinit var touchpadButton: Button
     private lateinit var screenTouchButton: Button
@@ -316,6 +318,7 @@ class MainActivity : Activity() {
         top.addView(sessionStatus, LinearLayout.LayoutParams(0, -1, 1.4f))
         fullscreenButton = blueButton("⛶  Full") { setFullscreen(!fullScreen) }
         rowButton(top, fullscreenButton, 0.8f)
+        sessionTopBar = top
         remotePage.addView(top, FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP))
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -345,6 +348,7 @@ class MainActivity : Activity() {
         rowButton(mediaBar, blueButton("↓ Scroll") { thread { send(JSONObject().put("type","scroll").put("delta",-120)) } })
         rowButton(mediaBar, blueButton("✕ Stop") { disconnect() })
         bottom.addView(mediaBar)
+        sessionBottomBar = bottom
         remotePage.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         rootLayout.addView(remotePage, LinearLayout.LayoutParams(-1, -1))
         setContentView(rootLayout)
@@ -468,7 +472,16 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun info(message: String) = runOnUiThread { status.text = message }
+    private fun info(message: String) = runOnUiThread {
+        status.text = message
+        if (::deviceStatus.isInitialized) {
+            deviceStatus.text = when {
+                message.startsWith("Connected") -> "●  Connected • " + hostInput.text.toString().trim()
+                message.startsWith("Connecting") -> "●  Connecting…"
+                else -> "●  Disconnected"
+            }
+        }
+    }
 
     private fun connect() {
         if (running) return
@@ -510,6 +523,7 @@ class MainActivity : Activity() {
                 if (approval.optString("type") != "approved") throw IOException("Host rejected or closed the pairing request")
                 ssl.soTimeout = 0
                 info("Connected. Remote screen active.")
+                runOnUiThread { showRemotePage() }
                 while (running) {
                     val message = read(input)
                     if (message.optString("type") == "audio") {
@@ -528,6 +542,7 @@ class MainActivity : Activity() {
                             if (running) {
                                 imageW = bitmap.width; imageH = bitmap.height
                                 screen.setImageBitmap(bitmap)
+                                previewImage.setImageBitmap(bitmap)
                             } else bitmap.recycle()
                         }
                     }
@@ -539,7 +554,10 @@ class MainActivity : Activity() {
                 try { socket?.close() } catch (_: Exception) {}
                 output = null; socket = null
                 releaseAudio()
-                runOnUiThread { connectButton.isEnabled = true }
+                runOnUiThread {
+                    connectButton.isEnabled = true
+                    if (::remotePage.isInitialized) showDashboard()
+                }
             }
         }
     }
@@ -625,29 +643,31 @@ class MainActivity : Activity() {
     }
 
     private fun setFullscreen(enabled: Boolean) {
+        if (enabled && !running) return
         fullScreen = enabled
         requestedOrientation = if (enabled) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                                else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        for (i in 0 until rootLayout.childCount) {
-            val child = rootLayout.getChildAt(i)
-            if (child !== screen && child !== modeBar)
-                child.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        }
+        sessionTopBar.visibility = if (enabled) View.GONE else View.VISIBLE
+        sessionBottomBar.visibility = if (enabled) View.GONE else View.VISIBLE
         window.decorView.systemUiVisibility = if (enabled)
-            (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
-        fullscreenButton.text = if (enabled) "Exit full screen" else "Full screen"
+            (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+            else 0
+        fullscreenButton.text = if (enabled) "Exit full" else "⛶  Full"
         screen.scaleType = ImageView.ScaleType.FIT_CENTER
-        if (enabled) rootLayout.setPadding(0, 0, 0, 0)
-        else if (Build.VERSION.SDK_INT >= 35) window.decorView.requestApplyInsets()
-        else rootLayout.setPadding(16, 14, 16, 10)
+        if (Build.VERSION.SDK_INT >= 35) window.decorView.requestApplyInsets()
+        else rootLayout.setPadding(0, 0, 0, 0)
     }
 
     private fun disconnect() {
         running = false
         try { socket?.close() } catch (_: Exception) {}
         info("Disconnected")
-        runOnUiThread { connectButton.isEnabled = true }
+        runOnUiThread {
+            connectButton.isEnabled = true
+            if (::remotePage.isInitialized) showDashboard()
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -655,6 +675,15 @@ class MainActivity : Activity() {
         // Keep the remote session and AudioTrack alive while the user rotates the phone.
         screen.scaleType = ImageView.ScaleType.FIT_CENTER
         screen.requestLayout()
+    }
+
+    @Deprecated("Back navigation exits immersive mode or returns to dashboard before closing the app")
+    override fun onBackPressed() {
+        when {
+            fullScreen -> setFullscreen(false)
+            remotePageVisible -> showDashboard()
+            else -> super.onBackPressed()
+        }
     }
 
     override fun onDestroy() { disconnect(); releaseAudio(); super.onDestroy() }
