@@ -31,12 +31,32 @@ jobs:
         with:
           gradle-version: '8.11.1'
       - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
-      - run: gradle -p android --no-daemon assembleDebug
-      - run: cp android/app/build/outputs/apk/debug/app-debug.apk AZ-RemoteConnect-Android-debug.apk
+      - name: Restore release signing key (optional, never printed)
+        env:
+          AZ_KEYSTORE_B64: ${{ secrets.AZ_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$AZ_KEYSTORE_B64" ]; then
+            mkdir -p android/signing
+            printf '%s' "$AZ_KEYSTORE_B64" | base64 --decode > android/signing/upload.jks
+            echo "AZ_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/signing/upload.jks" >> "$GITHUB_ENV"
+          fi
+      - name: Build viewer APK and full AAB
+        env:
+          AZ_KEYSTORE_PASSWORD: ${{ secrets.AZ_KEYSTORE_PASSWORD }}
+          AZ_KEY_ALIAS: ${{ secrets.AZ_KEY_ALIAS }}
+          AZ_KEY_PASSWORD: ${{ secrets.AZ_KEY_PASSWORD }}
+        run: gradle -p android --no-daemon assembleViewerDebug bundleFullRelease
+      - run: cp android/app/build/outputs/apk/viewer/debug/app-viewer-debug.apk AZ-RemoteConnect-Viewer-debug.apk
+      - name: Include Play-signed AAB only if signing secrets are complete
+        if: ${{ env.AZ_KEYSTORE_PATH != '' }}
+        shell: bash
+        run: cp android/app/build/outputs/bundle/fullRelease/app-full-release.aab AZ-RemoteConnect-Full-Play-signed.aab
       - uses: actions/upload-artifact@v4
         with:
           name: preview-android
-          path: AZ-RemoteConnect-Android-debug.apk
+          path: |
+            AZ-RemoteConnect-Viewer-debug.apk
+            AZ-RemoteConnect-Full-Play-signed.aab
           if-no-files-found: error
   windows:
     runs-on: windows-latest
@@ -79,14 +99,18 @@ jobs:
           path: release
       - name: Verify and checksum
         run: |
-          test -s release/AZ-RemoteConnect-Android-debug.apk
+          test -s release/AZ-RemoteConnect-Viewer-debug.apk
           test -s release/AZ-RemoteConnect-Windows-x64.exe
           test -s release/AZ-RemoteConnect-Windows-complete.zip
           cd release && sha256sum AZ-RemoteConnect-* > SHA256SUMS.txt
-      - name: Publish branded AZ RemoteConnect preview
+      - name: Publish safer viewer distribution preview
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="v0.2.0-branded.${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" release/AZ-RemoteConnect-Android-debug.apk release/AZ-RemoteConnect-Windows-x64.exe release/AZ-RemoteConnect-Windows-complete.zip release/SHA256SUMS.txt --target "$GITHUB_SHA" --title "AZ RemoteConnect — Blue A Icon Preview $GITHUB_RUN_NUMBER" --notes "BRANDED PREVIEW: Includes the approved blue remote-control A launcher icon (Android and Windows), LAN remote screen sharing and experimental remote input, audio and Android hosting. This is not certified for public-internet exposure. Android APK is debug-signed; Windows EXE is unsigned. The Windows ZIP includes supporting runtime files." --prerelease
+          TAG="v0.3.0-safety.${GITHUB_RUN_NUMBER}"
+          FILES=(release/AZ-RemoteConnect-Viewer-debug.apk release/AZ-RemoteConnect-Windows-x64.exe release/AZ-RemoteConnect-Windows-complete.zip release/SHA256SUMS.txt)
+          if [ -s release/AZ-RemoteConnect-Full-Play-signed.aab ]; then
+            FILES+=(release/AZ-RemoteConnect-Full-Play-signed.aab)
+          fi
+          gh release create "$TAG" "${FILES[@]}" --target "$GITHUB_SHA" --title "AZ RemoteConnect Safety Preview $GITHUB_RUN_NUMBER" --notes "Android Viewer APK: the app is a viewer/controller of a laptop and can share its screen, but cannot accept Accessibility-based remote touches on this Android device. This viewer is debug-signed. The full Android remote-touch AAB is published only when developer-owned release signing credentials are configured. The Windows EXE/ZIP are unsigned. Accessibility remote control requires prominent disclosure and affirmative consent; Play Protect/Google Play acceptance is not guaranteed." --prerelease
