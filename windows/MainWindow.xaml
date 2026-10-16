@@ -64,7 +64,7 @@
      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
      <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
       <Border Width="59" Height="59" CornerRadius="13" Background="#032653" BorderBrush="#1576D7" BorderThickness="1">
-       <Viewbox Margin="8"><TextBlock Text="◉" FontSize="43" Foreground="#4BCFFF" VerticalAlignment="Center"/></Viewbox>
+       <Image Source="/azremoteconnect-logo.png" Stretch="UniformToFill"/>
       </Border>
       <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
        <TextBlock Text="AZ Remote Connect" FontSize="23" FontWeight="Bold"/>
