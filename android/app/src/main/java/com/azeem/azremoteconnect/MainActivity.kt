@@ -52,6 +52,17 @@ class MainActivity : Activity() {
     private var audioRate = 0
     private lateinit var rootLayout: LinearLayout
     private lateinit var modeBar: LinearLayout
+    private lateinit var previewImage: ImageView
+    private lateinit var remotePage: FrameLayout
+    private lateinit var dashboardPage: LinearLayout
+    private lateinit var sessionStatus: TextView
+    private lateinit var sessionTopBar: LinearLayout
+    private lateinit var sessionBottomBar: LinearLayout
+    private lateinit var deviceStatus: TextView
+    private lateinit var touchpadButton: Button
+    private lateinit var screenTouchButton: Button
+    private var remotePageVisible = false
+
     private var touchpadMode = false
     private var fullScreen = false
     private var previousX = 0f
@@ -67,151 +78,320 @@ class MainActivity : Activity() {
     private var imageW = 0
     private var imageH = 0
 
+    // Blue dashboard and remote-session page share one Activity so the TLS session survives
+    // a page transition and immersive orientation changes without reconnecting.
+    private fun dp(size: Int) = (size * resources.displayMetrics.density + 0.5f).toInt()
+    private val navy get() = Color.rgb(5, 22, 49)
+    private val blue get() = Color.rgb(21, 127, 244)
+    private val panelBlue get() = Color.rgb(10, 42, 84)
+    private val ice get() = Color.rgb(227, 243, 255)
+
+    private fun rounded(color: Int, stroke: Boolean = true, radius: Int = 18): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = dp(radius).toFloat()
+            if (stroke) setStroke(dp(1), Color.rgb(38, 116, 194))
+        }
+
+    private fun textLine(value: String, size: Float = 14f, secondary: Boolean = false) =
+        TextView(this).apply {
+            text = value
+            textSize = size
+            setTextColor(if (secondary) Color.rgb(160, 198, 237) else ice)
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+    private fun blueButton(value: String, primary: Boolean = false, action: () -> Unit) =
+        Button(this).apply {
+            text = value
+            textSize = 13f
+            isAllCaps = false
+            setTextColor(Color.WHITE)
+            background = rounded(if (primary) blue else panelBlue)
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            setOnClickListener { action() }
+        }
+
+    private fun rowButton(parent: LinearLayout, button: Button, weight: Float = 1f) {
+        val lp = LinearLayout.LayoutParams(0, dp(49), weight)
+        lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+        parent.addView(button, lp)
+    }
+
+    private fun field(hintText: String, value: String = "") = EditText(this).apply {
+        hint = hintText
+        setText(value)
+        setSingleLine(true)
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        setHintTextColor(Color.rgb(159, 186, 217))
+        setPadding(dp(14), dp(10), dp(14), dp(10))
+        background = rounded(Color.rgb(3, 26, 61), radius = 12)
+    }
+
+    private fun addSpace(parent: LinearLayout, height: Int) {
+        parent.addView(View(this), LinearLayout.LayoutParams(1, dp(height)))
+    }
+
+    private fun infoDialog(title: String, message: String) {
+        android.app.AlertDialog.Builder(this).setTitle(title).setMessage(message)
+            .setPositiveButton("OK", null).show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = Color.rgb(4, 20, 45)
+        window.navigationBarColor = Color.rgb(3, 16, 39)
         rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 14, 16, 10)
-            setBackgroundColor(Color.rgb(6, 19, 47))
+            setBackgroundColor(navy)
         }
-        fun label(value: String): TextView = TextView(this).apply { text = value; setTextColor(Color.WHITE); textSize = 14f }
-        fun entry(hintText: String, value: String = ""): EditText = EditText(this).apply {
-            hint = hintText; setText(value); setSingleLine(true)
-            setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); textSize = 14f
+        dashboardPage = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(13), dp(8), dp(13), dp(8))
+            setBackgroundColor(navy)
         }
-        rootLayout.addView(label("AZ RemoteConnect  •  Secure LAN").apply { textSize = 20f; setTextColor(Color.rgb(231,244,255)); setPadding(8, 8, 8, 12) })
-        hostInput = entry("Laptop IP address", "192.168.1.2")
-        codeInput = entry("Laptop pairing code (6 digits)")
-        fingerprintInput = entry("Laptop verification code (6 characters)")
-        settingsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        settingsPanel.addView(hostInput); settingsPanel.addView(codeInput); settingsPanel.addView(fingerprintInput)
-        settingsPanel.setPadding(12, 8, 12, 8)
-        settingsPanel.background = GradientDrawable().apply { setColor(Color.rgb(14, 42, 86)); cornerRadius = 22f }
-        rootLayout.addView(settingsPanel)
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val brand = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        brand.addView(textLine("◉  AZ Remote Connect", 23f).apply { setTypeface(null, android.graphics.Typeface.BOLD) })
+        brand.addView(textLine("Control your PC, from anywhere on your trusted network", 11f, true))
+        header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(blueButton("⚙") {
+            infoDialog("Settings and privacy", "Remote sessions require a pairing code and host approval. The six-character verification prefix is not suitable for untrusted networks. Use a trusted VPN for remote connections. Screen-sharing and remote-touch consent remain separate.")
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        dashboardPage.addView(header)
+        addSpace(dashboardPage, 15)
+
+        // Device card, pairing fields and connection state.
+        val deviceCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(13), dp(14), dp(13))
+            background = rounded(Color.rgb(9, 47, 104))
+        }
+        val deviceHead = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        deviceHead.addView(textLine("▣", 32f), LinearLayout.LayoutParams(dp(48), dp(50)))
+        val identity = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        identity.addView(textLine("Connect to a device", 18f).apply { setTypeface(null, android.graphics.Typeface.BOLD) })
+        deviceStatus = textLine("●  Not connected", 12f, true)
+        identity.addView(deviceStatus)
+        deviceHead.addView(identity, LinearLayout.LayoutParams(0, -2, 1f))
+        deviceCard.addView(deviceHead)
+        addSpace(deviceCard, 7)
+        hostInput = field("Laptop or phone IP address", "192.168.1.2")
+        codeInput = field("6-digit pairing code")
+        fingerprintInput = field("6-character verification code")
+        for (input in listOf(hostInput, codeInput, fingerprintInput)) {
+            val lp = LinearLayout.LayoutParams(-1, dp(48))
+            lp.setMargins(0, dp(4), 0, dp(4))
+            deviceCard.addView(input, lp)
+        }
+        val connectRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        connectButton = blueButton("Connect", true) { connect() }
+        rowButton(connectRow, connectButton)
+        rowButton(connectRow, blueButton("Disconnect") { disconnect() })
+        deviceCard.addView(connectRow)
+        status = textLine("Ready. Connect using the same hotspot, Wi-Fi, or trusted VPN.", 12f, true)
+        deviceCard.addView(status)
+        dashboardPage.addView(deviceCard)
+        addSpace(dashboardPage, 12)
+
+        // Modes now select how the pointer behaves on the dedicated remote screen.
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        touchpadButton = blueButton("☝  Touchpad", true) { touchpadMode = true; updateModeButtons(); if (running) showRemotePage() }
+        screenTouchButton = blueButton("▣  Screen Touch") { touchpadMode = false; updateModeButtons(); if (running) showRemotePage() }
+        rowButton(modeRow, touchpadButton)
+        rowButton(modeRow, screenTouchButton)
+        rowButton(modeRow, blueButton("♫  Media") { if (running) showRemotePage() else infoDialog("Media", "Connect to a device first.") })
+        dashboardPage.addView(modeRow)
+        addSpace(dashboardPage, 7)
+
+        val previewCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(9), dp(10), dp(10))
+            background = rounded(Color.rgb(7, 39, 80))
+        }
+        previewCard.addView(textLine("LIVE SCREEN PREVIEW", 12f, true))
+        val previewFrame = FrameLayout(this).apply {
+            background = rounded(Color.rgb(1, 12, 29), radius = 12)
+            clipToOutline = true
+        }
+        previewImage = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(Color.BLACK)
+        }
+        previewFrame.addView(previewImage, FrameLayout.LayoutParams(-1, -1))
+        val overlay = textLine("Tap to open the remote screen", 12f).apply {
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.argb(175, 0, 17, 44))
+        }
+        previewFrame.addView(overlay, FrameLayout.LayoutParams(-1, dp(33), Gravity.BOTTOM))
+        previewFrame.setOnClickListener {
+            if (running) showRemotePage()
+            else infoDialog("Not connected", "Enter the host IP, pairing code, and verification code, then tap Connect.")
+        }
+        val previewLp = LinearLayout.LayoutParams(-1, dp(160))
+        previewLp.topMargin = dp(9)
+        previewCard.addView(previewFrame, previewLp)
+        previewCard.addView(blueButton("↗  Open full remote screen", true) {
+            if (running) showRemotePage()
+            else infoDialog("Not connected", "Connect to a laptop or phone first.")
+        }, LinearLayout.LayoutParams(-1, dp(47)).apply { topMargin = dp(9) })
+        dashboardPage.addView(previewCard)
+        addSpace(dashboardPage, 10)
+
+        val controls1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        rowButton(controls1, blueButton("▣  Keyboard") { if (running) { showRemotePage(); openRemoteKeyboard() } else infoDialog("Keyboard", "Connect to a device first.") })
+        rowButton(controls1, blueButton("⛶  Full Screen") { if (running) { showRemotePage(); setFullscreen(true) } else infoDialog("Full Screen", "Connect to a device first.") })
+        dashboardPage.addView(controls1)
+        val controls2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        rowButton(controls2, blueButton("◖))  Volume") { audioEnabled = !audioEnabled; if (!audioEnabled) { audioPlayer?.pause(); audioPlayer?.flush() } else audioPlayer?.play(); updateAudioButton() })
+        rowButton(controls2, blueButton("✕  Disconnect") { disconnect() })
+        dashboardPage.addView(controls2)
+        audioButton = blueButton("PC Audio: On") {
+            audioEnabled = !audioEnabled
+            if (!audioEnabled) { audioPlayer?.pause(); audioPlayer?.flush() } else audioPlayer?.play()
+            updateAudioButton()
+        }
+        dashboardPage.addView(audioButton, LinearLayout.LayoutParams(-1, dp(49)).apply { topMargin = dp(7) })
+        addSpace(dashboardPage, 12)
+
+        val hostCard = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(panelBlue)
+        }
+        hostCard.addView(textLine("SHARE THIS ANDROID PHONE", 12f, true))
         val hosting = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        hosting.addView(Button(this).apply {
-            text = "Share this phone"
-            setOnClickListener { showScreenShareDisclosure() }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        hosting.addView(Button(this).apply {
-            text = "Stop sharing"
-            setOnClickListener { startService(Intent(this@MainActivity, AndroidHostService::class.java).setAction(AndroidHostService.ACTION_STOP)) }
-        }, LinearLayout.LayoutParams(0, -2, 1f))
-        rootLayout.addView(hosting)
-        if (BuildConfig.FLAVOR == "full") {
-            rootLayout.addView(Button(this).apply {
-                text = "Enable remote touch (optional)"
-                setOnClickListener { showRemoteTouchDisclosure() }
-            })
-        } else {
-            rootLayout.addView(label("Viewer edition: screen sharing and remote viewing only; no Accessibility permission.").apply {
-                textSize = 12f
-                setPadding(8, 4, 8, 8)
-            })
-        }
-        hostDetails = label("Sharing is off. Screen sharing does not require Accessibility access.").apply { textSize = 12f }
-        rootLayout.addView(hostDetails)
-        rootLayout.addView(Button(this).apply {
-            text = "Refresh host code"
-            setOnClickListener {
-                hostDetails.text = if (AndroidHostService.active)
-                    "Phone hosting • Pair: ${AndroidHostService.code} • Verify: ${AndroidHostService.verification} • Port 48765"
-                    else "Phone host is inactive. ${AndroidHostService.hostError.ifBlank { "Start screen sharing above." }}"
-            }
+        rowButton(hosting, blueButton("Share phone", true) { showScreenShareDisclosure() })
+        rowButton(hosting, blueButton("Stop sharing") {
+            startService(Intent(this@MainActivity, AndroidHostService::class.java).setAction(AndroidHostService.ACTION_STOP))
         })
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        connectButton = Button(this).apply { text = "Connect"; setOnClickListener { connect() } }
-        val disconnect = Button(this).apply { text = "Disconnect"; setOnClickListener { disconnect() } }
-        controls.addView(connectButton, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        controls.addView(disconnect, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        rootLayout.addView(controls)
-        status = label("Connect to your Windows laptop on the same Wi-Fi network.")
-        rootLayout.addView(status)
-        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        keyboardInput = entry("Type on laptop")
-        tools.addView(keyboardInput, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2f))
-        fun toolButton(title: String, action: () -> Unit) {
-            tools.addView(Button(this).apply { text = title; textSize=11f; setOnClickListener { action() } },
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        hostCard.addView(hosting)
+        if (BuildConfig.FLAVOR == "full") {
+            hostCard.addView(blueButton("Optional remote touch permission") { showRemoteTouchDisclosure() },
+                LinearLayout.LayoutParams(-1, dp(44)))
         }
-        toolButton("Send") {
-            val value = keyboardInput.text.toString()
-            if (value.isNotEmpty()) { thread { send(JSONObject().put("type", "text").put("value", value.take(200))) }; keyboardInput.text.clear() }
+        hostDetails = textLine("Screen sharing is off; Accessibility is not required for viewing.", 12f, true)
+        hostCard.addView(hostDetails)
+        hostCard.addView(blueButton("Refresh phone host code") {
+            hostDetails.text = if (AndroidHostService.active)
+                "Phone hosting  •  Pair: " + AndroidHostService.code + "  •  Verify: " + AndroidHostService.verification
+            else "Phone host is off. " + AndroidHostService.hostError
+        }, LinearLayout.LayoutParams(-1, dp(45)))
+        dashboardPage.addView(hostCard)
+
+        val scroll = ScrollView(this).apply {
+            isFillViewport = false
+            isVerticalScrollBarEnabled = false
+            addView(dashboardPage, FrameLayout.LayoutParams(-1, -2))
         }
-        toolButton("⌫") { thread { send(JSONObject().put("type", "key").put("key", "BACKSPACE")) } }
-        toolButton("↵") { thread { send(JSONObject().put("type", "key").put("key", "ENTER")) } }
-        rootLayout.addView(tools)
-        val mouseTools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun mouseButton(title: String, action: () -> Unit) {
-            mouseTools.addView(Button(this).apply { text = title; textSize=11f; setOnClickListener { action() } },
-                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val homeShell = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        homeShell.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        val nav = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = rounded(Color.rgb(5, 32, 70), false)
         }
-        mouseButton("Right click") {
-            thread { send(JSONObject().put("type", "mouse").put("x", lastX.toDouble()).put("y", lastY.toDouble()).put("action", "right")) }
-        }
-        mouseButton("Scroll ↑") { thread { send(JSONObject().put("type", "scroll").put("delta", 120)) } }
-        mouseButton("Scroll ↓") { thread { send(JSONObject().put("type", "scroll").put("delta", -120)) } }
-        rootLayout.addView(mouseTools)
-        modeBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val modeButton = Button(this).apply {
-            text = "Screen Touch"
-            setOnClickListener {
-                touchpadMode = !touchpadMode
-                text = if (touchpadMode) "Touchpad" else "Screen Touch"
-            }
-        }
-        fullscreenButton = Button(this).apply { text = "Full screen"; setOnClickListener { setFullscreen(!fullScreen) } }
-        modeBar.addView(modeButton, LinearLayout.LayoutParams(0, -2, 1f))
-        modeBar.addView(fullscreenButton, LinearLayout.LayoutParams(0, -2, 1f))
-        audioButton = Button(this).apply {
-            text = "Audio: On"
-            setOnClickListener {
-                audioEnabled = !audioEnabled
-                text = if (audioEnabled) "Audio: On" else "Audio: Off"
-                if (!audioEnabled) { audioPlayer?.pause(); audioPlayer?.flush() } else audioPlayer?.play()
-            }
-        }
-        modeBar.addView(audioButton, LinearLayout.LayoutParams(0, -2, 1f))
-        fun styleButton(button: Button, primary: Boolean) {
-            button.isAllCaps = false
-            button.textSize = 13f
-            button.setTextColor(Color.WHITE)
-            button.background = GradientDrawable().apply {
-                setColor(if (primary) Color.rgb(23, 112, 242) else Color.rgb(26, 64, 119))
-                cornerRadius = 18f
-                setStroke(1, Color.rgb(55, 136, 239))
-            }
-            button.setPadding(12, 10, 12, 10)
-            val params = button.layoutParams as? LinearLayout.LayoutParams
-            if (params != null) { params.setMargins(3, 5, 3, 5); button.layoutParams = params }
-        }
-        listOf(connectButton, modeButton, fullscreenButton, audioButton).forEach { styleButton(it, it === connectButton) }
-        for (panel in listOf(hosting, controls, tools, mouseTools)) {
-            for (i in 0 until panel.childCount) {
-                val child = panel.getChildAt(i)
-                if (child is Button) styleButton(child, child === connectButton)
-            }
-        }
-        rootLayout.addView(modeBar)
+        rowButton(nav, blueButton("⌂  Home", true) { showDashboard() })
+        rowButton(nav, blueButton("⛓  Remote") { if (running) showRemotePage() else infoDialog("Remote", "Connect to a device first.") })
+        rowButton(nav, blueButton("▱  Files") { infoDialog("Files", "File transfer is not implemented in this preview.") })
+        rowButton(nav, blueButton("⚙  Settings") { infoDialog("Settings", "Use only trusted networks. Approve each incoming remote session at the host.") })
+        homeShell.addView(nav)
+        rootLayout.addView(homeShell, LinearLayout.LayoutParams(-1, -1))
+
+        // Dedicated AnyDesk-style viewer page; the dashboard preview never acts as a touchpad.
+        remotePage = FrameLayout(this).apply { setBackgroundColor(Color.BLACK); visibility = View.GONE }
         screen = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
-            adjustViewBounds = true
             setOnTouchListener { _, event -> handleTouch(event) }
         }
-        rootLayout.addView(screen, LinearLayout.LayoutParams(-1, 0, 1f))
-        rootLayout.addView(label("Pairing approval required. Tap, drag, right click, keyboard and scroll. Fast JPEG is best-effort, not guaranteed 60 FPS."))
+        remotePage.addView(screen, FrameLayout.LayoutParams(-1, -1))
+        val top = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(7), dp(8), dp(7))
+            setBackgroundColor(Color.argb(238, 4, 30, 69))
+        }
+        rowButton(top, blueButton("‹  Home") { showDashboard() }, 0.7f)
+        sessionStatus = textLine("Remote session", 13f)
+        top.addView(sessionStatus, LinearLayout.LayoutParams(0, -1, 1.4f))
+        fullscreenButton = blueButton("⛶  Full") { setFullscreen(!fullScreen) }
+        rowButton(top, fullscreenButton, 0.8f)
+        sessionTopBar = top
+        remotePage.addView(top, FrameLayout.LayoutParams(-1, dp(62), Gravity.TOP))
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(7), dp(5), dp(7), dp(7))
+            setBackgroundColor(Color.argb(231, 3, 25, 56))
+        }
+        val controlBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        rowButton(controlBar, blueButton("Touchpad") { touchpadMode = true; updateModeButtons() })
+        rowButton(controlBar, blueButton("Screen touch") { touchpadMode = false; updateModeButtons() })
+        rowButton(controlBar, blueButton("Right click") {
+            thread { send(JSONObject().put("type","mouse").put("x",lastX.toDouble()).put("y",lastY.toDouble()).put("action","right")) }
+        })
+        bottom.addView(controlBar)
+        val keyBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        keyboardInput = field("Type on laptop / phone")
+        keyboardInput.visibility = View.GONE
+        keyBar.addView(keyboardInput, LinearLayout.LayoutParams(0, dp(48), 2.2f))
+        rowButton(keyBar, blueButton("Send") {
+            val message = keyboardInput.text.toString()
+            if (message.isNotEmpty()) { thread { send(JSONObject().put("type","text").put("value",message.take(200))) }; keyboardInput.text.clear() }
+        }, 0.8f)
+        rowButton(keyBar, blueButton("⌫") { thread { send(JSONObject().put("type","key").put("key","BACKSPACE")) } }, 0.55f)
+        bottom.addView(keyBar)
+        val mediaBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        rowButton(mediaBar, blueButton("⌨ Keyboard") { openRemoteKeyboard() })
+        rowButton(mediaBar, blueButton("↑ Scroll") { thread { send(JSONObject().put("type","scroll").put("delta",120)) } })
+        rowButton(mediaBar, blueButton("↓ Scroll") { thread { send(JSONObject().put("type","scroll").put("delta",-120)) } })
+        rowButton(mediaBar, blueButton("✕ Stop") { disconnect() })
+        bottom.addView(mediaBar)
+        sessionBottomBar = bottom
+        remotePage.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
+        rootLayout.addView(remotePage, LinearLayout.LayoutParams(-1, -1))
         setContentView(rootLayout)
-        // Respect status/navigation bars in normal mode (Android 15 edge-to-edge).
+        updateModeButtons()
+        updateAudioButton()
         if (Build.VERSION.SDK_INT >= 35) {
-            window.decorView.setOnApplyWindowInsetsListener { view, insets ->
+            window.decorView.setOnApplyWindowInsetsListener { _, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-                if (!fullScreen) rootLayout.setPadding(16 + bars.left, 14 + bars.top, 16 + bars.right, 10 + bars.bottom)
-                else rootLayout.setPadding(0, 0, 0, 0)
+                if (fullScreen) rootLayout.setPadding(0, 0, 0, 0)
+                else rootLayout.setPadding(bars.left, bars.top, bars.right, bars.bottom)
                 insets
             }
             window.decorView.requestApplyInsets()
         }
+    }
+
+    private fun updateModeButtons() {
+        if (!::touchpadButton.isInitialized) return
+        touchpadButton.background = rounded(if (touchpadMode) blue else panelBlue)
+        screenTouchButton.background = rounded(if (touchpadMode) panelBlue else blue)
+    }
+    private fun updateAudioButton() {
+        if (::audioButton.isInitialized) audioButton.text = if (audioEnabled) "◖))  PC Audio: On" else "◖))  PC Audio: Off"
+    }
+    private fun showRemotePage() {
+        if (!running) return
+        remotePageVisible = true
+        (rootLayout.getChildAt(0)).visibility = View.GONE
+        remotePage.visibility = View.VISIBLE
+        sessionStatus.text = "●  " + hostInput.text.toString().trim() + "  •  " +
+            (if (touchpadMode) "Touchpad" else "Screen touch")
+    }
+    private fun showDashboard() {
+        if (fullScreen) setFullscreen(false)
+        remotePageVisible = false
+        (rootLayout.getChildAt(0)).visibility = View.VISIBLE
+        remotePage.visibility = View.GONE
+    }
+    private fun openRemoteKeyboard() {
+        keyboardInput.visibility = View.VISIBLE
+        keyboardInput.requestFocus()
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .showSoftInput(keyboardInput, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
     }
 
     private fun showScreenShareDisclosure() {
@@ -294,7 +474,16 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun info(message: String) = runOnUiThread { status.text = message }
+    private fun info(message: String) = runOnUiThread {
+        status.text = message
+        if (::deviceStatus.isInitialized) {
+            deviceStatus.text = when {
+                message.startsWith("Connected") -> "●  Connected • " + hostInput.text.toString().trim()
+                message.startsWith("Connecting") -> "●  Connecting…"
+                else -> "●  Disconnected"
+            }
+        }
+    }
 
     private fun connect() {
         if (running) return
@@ -336,6 +525,7 @@ class MainActivity : Activity() {
                 if (approval.optString("type") != "approved") throw IOException("Host rejected or closed the pairing request")
                 ssl.soTimeout = 0
                 info("Connected. Remote screen active.")
+                runOnUiThread { showRemotePage() }
                 while (running) {
                     val message = read(input)
                     if (message.optString("type") == "audio") {
@@ -354,6 +544,7 @@ class MainActivity : Activity() {
                             if (running) {
                                 imageW = bitmap.width; imageH = bitmap.height
                                 screen.setImageBitmap(bitmap)
+                                previewImage.setImageBitmap(bitmap)
                             } else bitmap.recycle()
                         }
                     }
@@ -365,7 +556,10 @@ class MainActivity : Activity() {
                 try { socket?.close() } catch (_: Exception) {}
                 output = null; socket = null
                 releaseAudio()
-                runOnUiThread { connectButton.isEnabled = true }
+                runOnUiThread {
+                    connectButton.isEnabled = true
+                    if (::remotePage.isInitialized) showDashboard()
+                }
             }
         }
     }
@@ -451,29 +645,31 @@ class MainActivity : Activity() {
     }
 
     private fun setFullscreen(enabled: Boolean) {
+        if (enabled && !running) return
         fullScreen = enabled
         requestedOrientation = if (enabled) ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                                else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        for (i in 0 until rootLayout.childCount) {
-            val child = rootLayout.getChildAt(i)
-            if (child !== screen && child !== modeBar)
-                child.visibility = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
-        }
+        sessionTopBar.visibility = if (enabled) View.GONE else View.VISIBLE
+        sessionBottomBar.visibility = if (enabled) View.GONE else View.VISIBLE
         window.decorView.systemUiVisibility = if (enabled)
-            (android.view.View.SYSTEM_UI_FLAG_FULLSCREEN or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY) else 0
-        fullscreenButton.text = if (enabled) "Exit full screen" else "Full screen"
+            (View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE)
+            else 0
+        fullscreenButton.text = if (enabled) "Exit full" else "⛶  Full"
         screen.scaleType = ImageView.ScaleType.FIT_CENTER
-        if (enabled) rootLayout.setPadding(0, 0, 0, 0)
-        else if (Build.VERSION.SDK_INT >= 35) window.decorView.requestApplyInsets()
-        else rootLayout.setPadding(16, 14, 16, 10)
+        if (Build.VERSION.SDK_INT >= 35) window.decorView.requestApplyInsets()
+        else rootLayout.setPadding(0, 0, 0, 0)
     }
 
     private fun disconnect() {
         running = false
         try { socket?.close() } catch (_: Exception) {}
         info("Disconnected")
-        runOnUiThread { connectButton.isEnabled = true }
+        runOnUiThread {
+            connectButton.isEnabled = true
+            if (::remotePage.isInitialized) showDashboard()
+        }
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -481,6 +677,15 @@ class MainActivity : Activity() {
         // Keep the remote session and AudioTrack alive while the user rotates the phone.
         screen.scaleType = ImageView.ScaleType.FIT_CENTER
         screen.requestLayout()
+    }
+
+    @Deprecated("Back navigation exits immersive mode or returns to dashboard before closing the app")
+    override fun onBackPressed() {
+        when {
+            fullScreen -> setFullscreen(false)
+            remotePageVisible -> showDashboard()
+            else -> super.onBackPressed()
+        }
     }
 
     override fun onDestroy() { disconnect(); releaseAudio(); super.onDestroy() }
