@@ -128,7 +128,7 @@ public partial class MainWindow : Window
                 return decision;
             });
             host.Start();
-            HostDetails.Text = "Temporary six-digit code: " + host.PairCode + "\nTCP port: 48765 • Session requires your approval. Phone clients from older builds may still require the separate certificate verification code.";
+            HostDetails.Text = "Temporary six-digit code: " + host.PairCode + "\nPort 48765 • Your approval is required. Android viewer builds that still request certificate verification: " + host.VerificationCode;
             SetStatus("Hosting PC screen. Waiting for an approved peer.");
         }
         catch (Exception ex)
