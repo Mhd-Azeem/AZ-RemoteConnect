@@ -202,10 +202,12 @@ class AndroidHostService : Service() {
         }
     }
     private fun handle(client: SSLSocket) {
+        var stage = "TLS handshake"
         client.use { ssl ->
             try {
                 ssl.soTimeout = 30000
                 ssl.startHandshake()
+                stage = "Pairing code"
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 val output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 val pair = read(input)
@@ -214,21 +216,31 @@ class AndroidHostService : Service() {
                     send(output, JSONObject().put("type", "error").put("message", "Incorrect pairing code"))
                     return
                 }
-                synchronized(approvalLock) { approved = null }
+                stage = "Phone-side approval"
+                synchronized(approvalLock) {
+                    approved = null
+                    pendingApproval = true
+                }
+                hostStatus = "Awaiting approval on phone notification"
                 (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                     .notify(42, notice(if (touchAllowedForSession) "Request: screen + remote touch" else "Request: view screen only", true))
                 synchronized(approvalLock) {
-                    val until = System.currentTimeMillis() + 30000
+                    val until = System.currentTimeMillis() + 45000
                     while (approved == null && System.currentTimeMillis() < until)
                         approvalLock.wait((until - System.currentTimeMillis()).coerceAtLeast(1))
                     if (approved != true) {
+                        pendingApproval = false
                         send(output, JSONObject().put("type", "error").put("message",
-                            if (approved == false) "Host denied access" else "Host approval timed out"))
+                            if (approved == false) "Phone denied access" else "Phone approval timed out after 45 seconds"))
                         return
                     }
                 }
+                pendingApproval = false
                 ssl.soTimeout = 0
+                stage = "Screen capture streaming"
                 send(output, JSONObject().put("type", "approved"))
+                activeClient = true
+                hostStatus = "Approved • streaming to remote viewer"
                 Thread({
                     try {
                         while (active && !ssl.isClosed) {
@@ -264,8 +276,14 @@ class AndroidHostService : Service() {
                     Thread.sleep(8)
                 }
             } catch (e: Exception) {
-                hostError = "Session: ${e.javaClass.simpleName}: ${e.message}"
-                android.util.Log.e("AZRemoteHost", hostError, e)
+                failure(stage, e)
+            } finally {
+                activeClient = false
+                synchronized(approvalLock) { pendingApproval = false; approvalLock.notifyAll() }
+                if (active) {
+                    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                        .notify(42, notice("Code: $code • Waiting for a viewer"))
+                }
             }
         }
     }
@@ -288,6 +306,10 @@ class AndroidHostService : Service() {
     }
     override fun onDestroy() {
         active = false; accepting.set(false)
+        starting.set(false)
+        activeClient = false
+        pendingApproval = false
+        hostStatus = "Sharing stopped"
         code = ""
         touchAllowedForSession = false
         try { server?.close() } catch (_: Exception) {}
