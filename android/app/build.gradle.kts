@@ -9,6 +9,7 @@ val signingReady = listOf("AZ_KEYSTORE_PATH", "AZ_KEYSTORE_PASSWORD", "AZ_KEY_AL
 android {
     namespace = "com.azeem.azremoteconnect"
     compileSdk = 35
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = "com.azeem.azremoteconnect"
