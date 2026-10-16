@@ -15,7 +15,12 @@ import android.view.WindowManager
 import org.json.JSONObject
 import java.io.*
 import java.net.ServerSocket
+import java.net.InetAddress
 import java.security.KeyPairGenerator
+import java.security.PrivateKey
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
+import java.util.concurrent.atomic.AtomicReference
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -141,9 +146,9 @@ class AndroidHostService : Service() {
         return START_NOT_STICKY
     }
     private fun makeTls(): SSLServerSocketFactory {
-        // RSA 2048 server identity offers broad compatibility with Windows SChannel and
-        // Android TLS providers. Keep the private key in AndroidKeyStore, never export it.
-        // v2 identity is intentionally distinct from the older EC identity.
+        // Use an AndroidKeyStore-backed host identity (private key never exported).
+        // The TLS 1.2 ECDHE_RSA/GCM profile is explicit on both Windows and Android:
+        // this avoids TLS 1.3 RSA-PSS incompatibilities with OEM Keystore drivers.
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         val alias = "AZRemoteConnectHostTLSv2"
         if (!store.containsAlias(alias)) {
@@ -151,20 +156,103 @@ class AndroidHostService : Service() {
             generator.initialize(KeyGenParameterSpec.Builder(alias,
                 KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
                 .setKeySize(2048)
-                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA384)
                 .setSignaturePaddings(KeyProperties.SIGNATURE_PADDING_RSA_PKCS1)
                 .setCertificateSubject(javax.security.auth.x500.X500Principal("CN=AZRemoteConnect-Temporary"))
                 .build())
             generator.generateKeyPair()
         }
-        val cert = store.getCertificate(alias)
-            ?: throw IllegalStateException("Android TLS host certificate is unavailable")
-        if (store.getKey(alias, null) == null)
-            throw IllegalStateException("Android TLS private key is unavailable")
-        val km = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-        km.init(store, null)
-        return SSLContext.getInstance("TLS").apply { init(km.keyManagers, null, SecureRandom()) }.serverSocketFactory
+        val certificate = store.getCertificate(alias) as? X509Certificate
+            ?: throw IllegalStateException("Android TLS certificate is missing")
+        val privateKey = store.getKey(alias, null) as? PrivateKey
+            ?: throw IllegalStateException("Android TLS private key is unavailable")
+
+        // Some OEMs' KeyManagerFactory implementations don't expose hardware-backed
+        // keys as usable server aliases. Select the verified host alias explicitly.
+        val keyManager = object : X509ExtendedKeyManager() {
+            override fun getClientAliases(keyType: String?, issuers: Array<java.security.Principal>?) = null
+            override fun chooseClientAlias(keyType: Array<String>?, issuers: Array<java.security.Principal>?, socket: java.net.Socket?) = null
+            override fun getServerAliases(keyType: String?, issuers: Array<java.security.Principal>?) =
+                if (keyType == "RSA") arrayOf(alias) else null
+            override fun chooseServerAlias(keyType: String?, issuers: Array<java.security.Principal>?, socket: java.net.Socket?) =
+                if (keyType == "RSA") alias else null
+            override fun chooseEngineServerAlias(keyType: String?, issuers: Array<java.security.Principal>?, engine: SSLEngine?) =
+                if (keyType == "RSA") alias else null
+            override fun getCertificateChain(requested: String?): Array<X509Certificate>? =
+                if (requested == alias) arrayOf(certificate) else null
+            override fun getPrivateKey(requested: String?): PrivateKey? =
+                if (requested == alias) privateKey else null
+        }
+        return SSLContext.getInstance("TLS").apply {
+            init(arrayOf<KeyManager>(keyManager), null, SecureRandom())
+        }.serverSocketFactory
     }
+
+    private val allowedCipherSuites = setOf(
+        "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+        "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+    )
+
+    private fun configureServerTls(socket: SSLServerSocket) {
+        val usable = socket.supportedCipherSuites.filter { it in allowedCipherSuites }
+        if (usable.isEmpty()) throw IllegalStateException(
+            "This phone has no supported ECDHE_RSA_AES_GCM TLS 1.2 suites")
+        socket.enabledProtocols = arrayOf("TLSv1.2")
+        socket.enabledCipherSuites = usable.toTypedArray()
+        socket.needClientAuth = false
+    }
+
+    private fun testLocalTls(factory: SSLServerSocketFactory) {
+        // A real loopback TLS negotiation checks that the generated hardware-backed
+        // certificate can actually sign a handshake. No data or pairing code is sent.
+        val cert = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            .getCertificate("AZRemoteConnectHostTLSv2") as X509Certificate
+        val expected = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+        val receiver = factory.createServerSocket(0, 1, InetAddress.getLoopbackAddress()) as SSLServerSocket
+        configureServerTls(receiver)
+        receiver.soTimeout = 6500
+        val serverError = AtomicReference<Throwable?>(null)
+        val worker = Thread({
+            try {
+                (receiver.accept() as SSLSocket).use { peer ->
+                    peer.enabledProtocols = arrayOf("TLSv1.2")
+                    peer.soTimeout = 5500
+                    peer.startHandshake()
+                }
+            } catch (error: Throwable) { serverError.set(error) }
+        }, "az-host-tls-self-test")
+        worker.isDaemon = true
+        try {
+            worker.start()
+            val pinTrust = object : X509TrustManager {
+                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+                    throw CertificateException("Client certificate auth is not supported")
+                }
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                    val received = chain.firstOrNull() ?: throw CertificateException("Missing TLS certificate")
+                    val digest = MessageDigest.getInstance("SHA-256").digest(received.encoded)
+                    if (!MessageDigest.isEqual(expected, digest))
+                        throw CertificateException("Local TLS test certificate did not match the host")
+                }
+            }
+            val testContext = SSLContext.getInstance("TLS").apply {
+                init(null, arrayOf<TrustManager>(pinTrust), SecureRandom())
+            }
+            (testContext.socketFactory.createSocket(InetAddress.getLoopbackAddress(), receiver.localPort) as SSLSocket)
+                .use { client ->
+                    client.enabledProtocols = arrayOf("TLSv1.2")
+                    client.soTimeout = 5500
+                    client.startHandshake()
+                }
+            worker.join(5500)
+            serverError.get()?.let { throw IllegalStateException("Server TLS self-test error: ${it.message}", it) }
+            if (worker.isAlive) throw IllegalStateException("Server TLS self-test timed out")
+        } finally {
+            receiver.close()
+        }
+    }
+
     private fun read(input: DataInputStream): JSONObject {
         val length = input.readInt()
         if (length < 1 || length > 8 * 1024 * 1024) throw IOException("Frame size invalid")
@@ -178,7 +266,10 @@ class AndroidHostService : Service() {
         try {
             hostStatus = "Initializing TLS host certificate"
             val factory = makeTls()
-            val listener = factory.createServerSocket(48765)
+            hostStatus = "Verifying local encrypted handshake"
+            testLocalTls(factory)
+            val listener = factory.createServerSocket(48765) as SSLServerSocket
+            configureServerTls(listener)
             server = listener
             code = (100000 + SecureRandom().nextInt(900000)).toString()
             active = true
@@ -289,10 +380,11 @@ class AndroidHostService : Service() {
                 }
             } catch (e: Exception) {
                 if (stage == "TLS handshake") {
-                    hostError = "A connecting device closed or failed the encrypted handshake. " +
-                        "Check that both devices use the latest release, share a reachable Wi-Fi/hotspot " +
-                        "or private VPN address, and that TCP 48765 is not blocked. " +
-                        "See the controlling device's error details."
+                    val underlying = generateSequence(e as Throwable?) { it.cause }.last()
+                    hostError = "TLS 1.2 handshake failed: " +
+                        underlying.javaClass.simpleName + ": " +
+                        (underlying.message ?: "peer closed the encrypted connection").take(220) +
+                        ". A raw port test also triggers a harmless 'connection closed' message."
                     // A failed incoming negotiation does not stop the listener.
                     hostStatus = "Ready for incoming connections on port 48765"
                     android.util.Log.w("AZRemoteHost", "TLS negotiation aborted by remote peer", e)

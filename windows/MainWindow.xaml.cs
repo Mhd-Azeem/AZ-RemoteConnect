@@ -216,7 +216,9 @@ public partial class MainWindow : Window
                 new SslClientAuthenticationOptions
                 {
                     TargetHost = "AZRemoteConnect-Temporary",
-                    EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+                    // Android host deliberately supports TLS 1.2 ECDHE_RSA/AES-GCM.
+                    // Avoid RSA-PSS TLS 1.3 signing incompatibility with phone hardware keystores.
+                    EnabledSslProtocols = SslProtocols.Tls12
                 }, token);
 
             if (seenPin == null) throw new AuthenticationException("Host did not present a TLS identity.");
@@ -248,7 +250,14 @@ public partial class MainWindow : Window
         }
         catch (AuthenticationException ex)
         {
-            SetStatus("Certificate or trust error: " + ex.Message + ". If the Android app was reinstalled, forget trusted phone and verify again on a trusted network.");
+            var cause = ex.GetBaseException();
+            SetStatus("TLS 1.2 handshake/certificate error: " + cause.GetType().Name +
+                ": " + cause.Message + ". If the host certificate changed, use Forget phone trust on this exact IP.");
+            System.Windows.MessageBox.Show(this,
+                "The phone and laptop reached the TLS handshake, but authentication failed.\n\n" +
+                "Reason: " + ex.Message + "\n\nRoot cause: " + cause.Message +
+                "\n\nOn Android, tap Refresh phone host code and inspect the TLS self-test or last connection error.",
+                "AZ RemoteConnect — TLS diagnostic", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (OperationCanceledException) { SetStatus("Connection cancelled."); }
         catch (EndOfStreamException)
