@@ -132,6 +132,35 @@ internal sealed class LanHost : IAsyncDisposable
         };
         SendInput((uint)pair.Length, pair, Marshal.SizeOf<INPUT>());
     }
+    // CopyFromScreen does not include the Windows hardware pointer, so composite
+    // the actual cursor onto each JPEG using its screen coordinates and hotspot.
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CURSORINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hCursor;
+        public System.Drawing.Point ptScreenPos;
+    }
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetCursorInfo(ref CURSORINFO cursor);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DrawIconEx(IntPtr dc, int x, int y, IntPtr icon,
+        int width, int height, uint frameStep, IntPtr brush, uint flags);
+
+    private static void PaintCursor(Graphics graphics, Rectangle desktop)
+    {
+        var cursor = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+        if (!GetCursorInfo(ref cursor) || (cursor.flags & 1) == 0 || cursor.hCursor == IntPtr.Zero) return;
+        var dc = graphics.GetHdc();
+        try
+        {
+            DrawIconEx(dc, cursor.ptScreenPos.X - desktop.Left,
+                cursor.ptScreenPos.Y - desktop.Top, cursor.hCursor, 0, 0, 0,
+                IntPtr.Zero, 0x0003); // DI_NORMAL uses the actual system cursor
+        }
+        finally { graphics.ReleaseHdc(dc); }
+    }
     // Loopback capture records the Windows default playback device, not the microphone.
     // Audio messages share the existing TLS stream with video so no second unauthenticated port is opened.
     private static async Task SendFramesAndAudio(Stream stream, CancellationToken ct)
@@ -186,7 +215,10 @@ internal sealed class LanHost : IAsyncDisposable
                 var bounds = SystemInformation.VirtualScreen;
                 using var bmp = new Bitmap(bounds.Width, bounds.Height);
                 using (var graphics = Graphics.FromImage(bmp))
+                {
                     graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
+                    PaintCursor(graphics, bounds);
+                }
                 using var ms = new MemoryStream();
                 using var parameters = new EncoderParameters(1);
                 parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 50L);
