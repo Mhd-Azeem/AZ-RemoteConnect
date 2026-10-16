@@ -113,7 +113,7 @@ public partial class MainWindow : Window
 
     private void ExplainSettings()
     {
-        ShowInformation("Connection security", "Enter only the six-digit temporary code shown by the Android host. On first contact, AZ RemoteConnect asks you to trust the device's TLS identity. That full identity is remembered in your Windows profile and a later certificate change is blocked.\n\nIMPORTANT: The first connection is trust-on-first-use, which can be intercepted on a hostile network. The code is not a cryptographic replacement for strong peer verification. Use a trusted hotspot or VPN; never forward port 48765 onto the public internet.\n\nTo remove a saved identity, use 'Forget phone trust'.");
+        ShowInformation("Connection security", "Connect on the same trusted Wi-Fi or hotspot with the host IP and its current six-digit pairing code. The host must approve every incoming session. TLS encryption remains enabled, and after an approved first pairing the full host identity is remembered automatically. If that identity later changes, the connection is blocked until you intentionally forget the saved host. No extra verification code is required. Do not forward port 48765 to the public internet.");
     }
 
     private void ShowInformation(string title, string message) =>
