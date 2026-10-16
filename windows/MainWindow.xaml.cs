@@ -195,6 +195,7 @@ public partial class MainWindow : Window
         string? seenPin = null;
         viewerStop = new CancellationTokenSource();
         var token = viewerStop.Token;
+        var connectionPhase = "TCP";
         Connect.IsEnabled = false;
 
         try
@@ -202,6 +203,8 @@ public partial class MainWindow : Window
             SetStatus("Connecting to " + connectedHostKey + "...");
             var client = new TcpClient();
             await client.ConnectAsync(address, port, token);
+            connectionPhase = "TLS authentication";
+            SetStatus("Reached phone. Establishing secure channel...");
             viewer = new SslStream(client.GetStream(), false, (_, cert, _, _) =>
             {
                 if (cert == null) return false;
@@ -216,6 +219,7 @@ public partial class MainWindow : Window
                 }, token);
 
             if (seenPin == null) throw new AuthenticationException("Host did not present a TLS identity.");
+            connectionPhase = "First-time trust";
             if (trustedPin == null)
             {
                 var choice = System.Windows.MessageBox.Show(this,
@@ -225,6 +229,8 @@ public partial class MainWindow : Window
                     "First connection — verify your network", MessageBoxButton.YesNo, MessageBoxImage.Warning);
                 if (choice != MessageBoxResult.Yes) throw new AuthenticationException("You declined to trust the first connection.");
             }
+            connectionPhase = "Pairing and phone approval";
+            SetStatus("Secure channel opened. Waiting for phone approval...");
             await RemoteTransport.SendAsync(viewer, new { type = "pair", code }, token);
             using (var accepted = await RemoteTransport.ReadAsync(viewer, token))
             {
@@ -240,6 +246,7 @@ public partial class MainWindow : Window
                 RememberTrust(connectedHostKey, seenPin);
             }
             connectedPin = seenPin;
+            connectionPhase = "Screen streaming";
             SetStatus("Connected to " + address + " • Phone session approved");
             RefreshState(true);
             viewer.ReadTimeout = Timeout.Infinite;
@@ -250,8 +257,20 @@ public partial class MainWindow : Window
             SetStatus("Certificate or trust error: " + ex.Message + ". If the Android app was reinstalled, forget trusted phone and verify again on a trusted network.");
         }
         catch (OperationCanceledException) { SetStatus("Connection cancelled."); }
-        catch (EndOfStreamException) { SetStatus("The host closed the session. Check your phone's sharing notification."); }
-        catch (IOException ex) { SetStatus("Connection ended: " + ex.Message); }
+        catch (EndOfStreamException)
+        {
+            SetStatus(connectionPhase == "TLS authentication"
+                ? "Phone closed the secure handshake. On Android tap Share phone, allow screen capture, wait for READY, then Refresh code. Check Last session error for TLS details."
+                : "Phone closed during " + connectionPhase + ". Open its sharing notification and Refresh host code. Re-enter the new 6-digit code.");
+        }
+        catch (IOException ex)
+        {
+            if (ex.Message.Contains("EOF", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("0 bytes", StringComparison.OrdinalIgnoreCase))
+                SetStatus("Phone closed the connection during " + connectionPhase +
+                    ". Open AZ RemoteConnect on the phone, tap Refresh phone host code, and check Host status / Last session error. Restart sharing if required.");
+            else SetStatus(connectionPhase + " failed: " + ex.Message);
+        }
         catch (Exception ex) { SetStatus("Could not connect: " + ex.Message); }
         finally
         {
