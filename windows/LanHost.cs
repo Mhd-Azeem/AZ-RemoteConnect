@@ -142,6 +142,17 @@ internal sealed class LanHost : IAsyncDisposable
         public IntPtr hCursor;
         public System.Drawing.Point ptScreenPos;
     }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ICONINFO
+    {
+        [MarshalAs(UnmanagedType.Bool)] public bool fIcon;
+        public uint xHotspot, yHotspot;
+        public IntPtr hbmMask, hbmColor;
+    }
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetIconInfo(IntPtr cursor, out ICONINFO info);
+    [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeleteObject(IntPtr bitmap);
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetCursorInfo(ref CURSORINFO cursor);
     [DllImport("user32.dll", SetLastError = true)]
@@ -152,12 +163,20 @@ internal sealed class LanHost : IAsyncDisposable
     {
         var cursor = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
         if (!GetCursorInfo(ref cursor) || (cursor.flags & 1) == 0 || cursor.hCursor == IntPtr.Zero) return;
+        int hotspotX = 0, hotspotY = 0;
+        if (GetIconInfo(cursor.hCursor, out var icon))
+        {
+            hotspotX = checked((int)icon.xHotspot);
+            hotspotY = checked((int)icon.yHotspot);
+            if (icon.hbmMask != IntPtr.Zero) DeleteObject(icon.hbmMask);
+            if (icon.hbmColor != IntPtr.Zero) DeleteObject(icon.hbmColor);
+        }
         var dc = graphics.GetHdc();
         try
         {
-            DrawIconEx(dc, cursor.ptScreenPos.X - desktop.Left,
-                cursor.ptScreenPos.Y - desktop.Top, cursor.hCursor, 0, 0, 0,
-                IntPtr.Zero, 0x0003); // DI_NORMAL uses the actual system cursor
+            DrawIconEx(dc, cursor.ptScreenPos.X - desktop.Left - hotspotX,
+                cursor.ptScreenPos.Y - desktop.Top - hotspotY, cursor.hCursor, 0, 0, 0,
+                IntPtr.Zero, 0x0003);
         }
         finally { graphics.ReleaseHdc(dc); }
     }
