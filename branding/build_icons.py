@@ -24,6 +24,7 @@ for qualifier, pixels in {
     folder.mkdir(parents=True, exist_ok=True)
     image.resize((pixels, pixels), Image.Resampling.LANCZOS).save(folder / "ic_launcher.png")
 
+image.resize((128, 128), Image.Resampling.LANCZOS).save(ROOT / "windows" / "azremoteconnect-logo.png")
 windows = ROOT / "windows" / "azremoteconnect.ico"
 image.resize((256, 256), Image.Resampling.LANCZOS).save(windows, format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 print(f"Generated Android launcher icons and Windows icon from {source.size} branded source.")
