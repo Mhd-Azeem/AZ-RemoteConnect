@@ -126,7 +126,11 @@ class AndroidHostService : Service() {
             frameHeight = metrics.heightPixels
             reader = ImageReader.newInstance(frameWidth, frameHeight, android.graphics.PixelFormat.RGBA_8888, 2)
             projection?.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() { stopSelf() }
+                override fun onStop() {
+                    hostError = "Android ended screen capture. Start a new sharing session."
+                    hostStatus = hostError
+                    stopSelf()
+                }
             }, Handler(Looper.getMainLooper()))
             display = projection?.createVirtualDisplay("AZ remote screen", frameWidth, frameHeight, metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader?.surface, null, null)
