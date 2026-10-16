@@ -34,8 +34,11 @@ jobs:
       - name: Restore release signing key (optional, never printed)
         env:
           AZ_KEYSTORE_B64: ${{ secrets.AZ_KEYSTORE_B64 }}
+          AZ_KEYSTORE_PASSWORD: ${{ secrets.AZ_KEYSTORE_PASSWORD }}
+          AZ_KEY_ALIAS: ${{ secrets.AZ_KEY_ALIAS }}
+          AZ_KEY_PASSWORD: ${{ secrets.AZ_KEY_PASSWORD }}
         run: |
-          if [ -n "$AZ_KEYSTORE_B64" ]; then
+          if [ -n "$AZ_KEYSTORE_B64" ] && [ -n "$AZ_KEYSTORE_PASSWORD" ] && [ -n "$AZ_KEY_ALIAS" ] && [ -n "$AZ_KEY_PASSWORD" ]; then
             mkdir -p android/signing
             printf '%s' "$AZ_KEYSTORE_B64" | base64 --decode > android/signing/upload.jks
             echo "AZ_KEYSTORE_PATH=$GITHUB_WORKSPACE/android/signing/upload.jks" >> "$GITHUB_ENV"
