@@ -14,6 +14,7 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using NAudio.Wave;
 
 namespace AZRemoteConnect;
@@ -55,7 +56,8 @@ internal sealed class LanHost : IAsyncDisposable
                 if (!await approve()) return;
                 await RemoteTransport.SendAsync(tls, new { type = "approved" }, stop.Token);
                 using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
-                var frames = SendFramesAndAudio(tls, sessionStop.Token);
+                var settings = new StreamSettings();
+                var frames = SendFramesAndAudio(tls, sessionStop.Token, settings);
                 try
                 {
                     while (!sessionStop.IsCancellationRequested)
@@ -70,8 +72,29 @@ internal sealed class LanHost : IAsyncDisposable
                         else if (kind == "key")
                         {
                             var key = RemoteTransport.Field(command, "key");
-                            ushort vk = key switch { "BACKSPACE" => 0x08, "ENTER" => 0x0D, "TAB" => 0x09, "ESC" => 0x1B, "DELETE" => 0x2E, "LEFT" => 0x25, "UP" => 0x26, "RIGHT" => 0x27, "DOWN" => 0x28, _ => (ushort)0 };
-                            if (vk != 0) SendVirtualKey(vk);
+                            ushort vk = key switch {
+                                "BACKSPACE" => 0x08, "ENTER" => 0x0D, "TAB" => 0x09,
+                                "ESC" => 0x1B, "DELETE" => 0x2E, "LEFT" => 0x25,
+                                "UP" => 0x26, "RIGHT" => 0x27, "DOWN" => 0x28,
+                                "HOME" => 0x24, "END" => 0x23, "PAGEUP" => 0x21,
+                                "PAGEDOWN" => 0x22, "SPACE" => 0x20, _ => (ushort)0
+                            };
+                            if (vk == 0 && key.Length == 1 && ((key[0] >= 'A' && key[0] <= 'Z') || (key[0] >= '0' && key[0] <= '9'))) vk = key[0];
+                            if (vk != 0) SendShortcut(vk, RemoteTransport.Field(command, "modifiers"));
+                        }
+                        else if (kind == "quality")
+                        {
+                            var profile = RemoteTransport.Field(command, "profile");
+                            if (profile is "smooth" or "balanced" or "data") settings.Profile = profile;
+                        }
+                        else if (kind == "button")
+                        {
+                            var action = RemoteTransport.Field(command, "action");
+                            if (RemoteTransport.Field(command, "button") == "left")
+                            {
+                                if (action == "down") mouse_event(0x0002,0,0,0,UIntPtr.Zero);
+                                if (action == "up") mouse_event(0x0004,0,0,0,UIntPtr.Zero);
+                            }
                         }
                         else if (kind == "scroll")
                         {
@@ -92,7 +115,11 @@ internal sealed class LanHost : IAsyncDisposable
                         else if (kind == "click")
                         {
                             var button = RemoteTransport.Field(command, "button");
-                            if (button == "left") { mouse_event(0x0002,0,0,0,UIntPtr.Zero); mouse_event(0x0004,0,0,0,UIntPtr.Zero); }
+                            if (button == "left")
+                            {
+                                int times = RemoteTransport.Field(command, "count") == "2" ? 2 : 1;
+                                for (int i = 0; i < times; i++) { mouse_event(0x0002,0,0,0,UIntPtr.Zero); mouse_event(0x0004,0,0,0,UIntPtr.Zero); }
+                            }
                         }
                         else if (kind == "mouse")
                         {
@@ -132,6 +159,25 @@ internal sealed class LanHost : IAsyncDisposable
         };
         SendInput((uint)pair.Length, pair, Marshal.SizeOf<INPUT>());
     }
+    private static void SendKeyPart(ushort key, bool release)
+    {
+        var data = new[] { new INPUT { type = 1, data = new InputUnion {
+            keyboard = new KEYBDINPUT { vk = key, flags = release ? 0x0002u : 0u }
+        } } };
+        SendInput(1, data, Marshal.SizeOf<INPUT>());
+    }
+    private static void SendShortcut(ushort key, string modifiers)
+    {
+        var pressed = new System.Collections.Generic.List<ushort>();
+        if (modifiers.Contains("CTRL", StringComparison.Ordinal)) pressed.Add(0x11);
+        if (modifiers.Contains("ALT", StringComparison.Ordinal)) pressed.Add(0x12);
+        if (modifiers.Contains("SHIFT", StringComparison.Ordinal)) pressed.Add(0x10);
+        if (modifiers.Contains("WIN", StringComparison.Ordinal)) pressed.Add(0x5B);
+        foreach (var vk in pressed) SendKeyPart(vk, false);
+        try { SendVirtualKey(key); }
+        finally { for (int i = pressed.Count - 1; i >= 0; i--) SendKeyPart(pressed[i], true); }
+    }
+    private sealed class StreamSettings { public volatile string Profile = "balanced"; }
     // CopyFromScreen does not include the Windows hardware pointer, so composite
     // the actual cursor onto each JPEG using its screen coordinates and hotspot.
     [StructLayout(LayoutKind.Sequential)]
@@ -182,7 +228,7 @@ internal sealed class LanHost : IAsyncDisposable
     }
     // Loopback capture records the Windows default playback device, not the microphone.
     // Audio messages share the existing TLS stream with video so no second unauthenticated port is opened.
-    private static async Task SendFramesAndAudio(Stream stream, CancellationToken ct)
+    private static async Task SendFramesAndAudio(Stream stream, CancellationToken ct, StreamSettings settings)
     {
         using var capture = new WasapiLoopbackCapture();
         var format = capture.WaveFormat;
@@ -224,6 +270,11 @@ internal sealed class LanHost : IAsyncDisposable
             var encoder = ImageCodecInfo.GetImageEncoders().First(x => x.MimeType == "image/jpeg");
             while (!ct.IsCancellationRequested)
             {
+                var clock = Stopwatch.StartNew();
+                var profile = settings.Profile;
+                int maxLongEdge = profile == "data" ? 960 : profile == "smooth" ? 1280 : 1600;
+                int frameInterval = profile == "data" ? 85 : profile == "smooth" ? 33 : 50;
+                long quality = profile == "data" ? 43L : profile == "smooth" ? 48L : 58L;
                 // Send a bounded amount of buffered audio before the next video frame.
                 for (int i = 0; i < 3 && pending.TryDequeue(out var chunk); i++)
                 {
@@ -238,12 +289,15 @@ internal sealed class LanHost : IAsyncDisposable
                     graphics.CopyFromScreen(bounds.Left, bounds.Top, 0, 0, bounds.Size);
                     PaintCursor(graphics, bounds);
                 }
+                double scale = Math.Min(1.0, maxLongEdge / (double)Math.Max(bounds.Width, bounds.Height));
+                using var scaled = new Bitmap(bmp, new Size(
+                    Math.Max(1, (int)(bounds.Width * scale)), Math.Max(1, (int)(bounds.Height * scale))));
                 using var ms = new MemoryStream();
                 using var parameters = new EncoderParameters(1);
-                parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 50L);
-                bmp.Save(ms, encoder, parameters);
+                parameters.Param[0] = new EncoderParameter(System.Drawing.Imaging.Encoder.Quality, quality);
+                scaled.Save(ms, encoder, parameters);
                 await RemoteTransport.SendAsync(stream, new { type = "frame", jpeg = Convert.ToBase64String(ms.ToArray()) }, ct);
-                await Task.Delay(16, ct); // 60 FPS target only; actual performance depends on system/network
+                await Task.Delay(Math.Max(1, frameInterval - (int)clock.ElapsedMilliseconds), ct);
             }
         }
         finally

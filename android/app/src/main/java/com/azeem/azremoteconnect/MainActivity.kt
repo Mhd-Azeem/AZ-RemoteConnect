@@ -32,6 +32,7 @@ import javax.net.ssl.*
 import org.json.JSONObject
 import kotlin.concurrent.thread
 import kotlin.math.min
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
     private lateinit var hostInput: EditText
@@ -53,6 +54,19 @@ class MainActivity : Activity() {
     private lateinit var rootLayout: LinearLayout
     private lateinit var modeBar: LinearLayout
     private lateinit var previewImage: ImageView
+    private lateinit var history: DeviceHistory
+    private var devicesDialog: android.app.AlertDialog? = null
+    @Volatile private var lastApprovedFingerprint = ""
+    @Volatile private var approvedAddress = ""
+    @Volatile private var stopRequested = false
+    private val imageUiBusy = AtomicBoolean(false)
+    private var pointerSensitivity = 1.6f
+    private var lastTapAt = 0L
+    private var heldPointer = false
+    private var gestureTwoFingers = false
+    private var previousTwoFingerY = 0f
+    private var cursorX = 0.5f
+    private var cursorY = 0.5f
     private lateinit var remotePage: FrameLayout
     private lateinit var dashboardPage: LinearLayout
     private lateinit var sessionStatus: TextView
@@ -140,6 +154,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        history = DeviceHistory(this)
         window.statusBarColor = Color.rgb(4, 20, 45)
         window.navigationBarColor = Color.rgb(3, 16, 39)
         rootLayout = LinearLayout(this).apply {
@@ -292,8 +307,8 @@ class MainActivity : Activity() {
         }
         rowButton(nav, blueButton("⌂  Home", true) { showDashboard() })
         rowButton(nav, blueButton("⛓  Remote") { if (running) showRemotePage() else infoDialog("Remote", "Connect to a device first.") })
-        rowButton(nav, blueButton("▱  Files") { infoDialog("Files", "File transfer is not implemented in this preview.") })
-        rowButton(nav, blueButton("⚙  Settings") { infoDialog("Settings", "Use only trusted networks. Approve each incoming remote session at the host.") })
+        rowButton(nav, blueButton("▤  Devices") { showDeviceManager() })
+        rowButton(nav, blueButton("⚙  Settings") { showControlSettings() })
         homeShell.addView(nav)
         rootLayout.addView(homeShell, LinearLayout.LayoutParams(-1, -1))
 
@@ -326,6 +341,7 @@ class MainActivity : Activity() {
         val controlBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         rowButton(controlBar, blueButton("Touchpad") { touchpadMode = true; updateModeButtons() })
         rowButton(controlBar, blueButton("Screen touch") { touchpadMode = false; updateModeButtons() })
+        rowButton(controlBar, blueButton("Left click") { sendClick() })
         rowButton(controlBar, blueButton("Right click") {
             thread { send(JSONObject().put("type","mouse").put("x",lastX.toDouble()).put("y",lastY.toDouble()).put("action","right")) }
         })
@@ -344,6 +360,8 @@ class MainActivity : Activity() {
         rowButton(mediaBar, blueButton("⌨ Keyboard") { openRemoteKeyboard() })
         rowButton(mediaBar, blueButton("↑ Scroll") { thread { send(JSONObject().put("type","scroll").put("delta",120)) } })
         rowButton(mediaBar, blueButton("↓ Scroll") { thread { send(JSONObject().put("type","scroll").put("delta",-120)) } })
+        rowButton(mediaBar, blueButton("⌨ Keys") { showSpecialKeys() })
+        rowButton(mediaBar, blueButton("⋮ More") { showControlSettings() })
         rowButton(mediaBar, blueButton("✕ Stop") { disconnect() })
         bottom.addView(mediaBar)
         sessionBottomBar = bottom
@@ -361,6 +379,131 @@ class MainActivity : Activity() {
             }
             window.decorView.requestApplyInsets()
         }
+    }
+
+    private fun showSpecialKeys() {
+        val keys = arrayOf("Tab", "Enter", "Escape", "Backspace", "Delete",
+            "Arrow Up", "Arrow Down", "Arrow Left", "Arrow Right",
+            "Home", "End", "Page Up", "Page Down",
+            "Select All (Ctrl+A)", "Copy (Ctrl+C)", "Paste (Ctrl+V)",
+            "Undo (Ctrl+Z)", "Save (Ctrl+S)", "Switch App (Alt+Tab)",
+            "Show Desktop (Win+D)")
+        val mapped = listOf(
+            "TAB" to "", "ENTER" to "", "ESC" to "", "BACKSPACE" to "",
+            "DELETE" to "", "UP" to "", "DOWN" to "", "LEFT" to "",
+            "RIGHT" to "", "HOME" to "", "END" to "", "PAGEUP" to "",
+            "PAGEDOWN" to "", "A" to "CTRL", "C" to "CTRL",
+            "V" to "CTRL", "Z" to "CTRL", "S" to "CTRL",
+            "TAB" to "ALT", "D" to "WIN"
+        )
+        android.app.AlertDialog.Builder(this).setTitle("Windows Keys & Shortcuts")
+            .setItems(keys) { _, i -> sendKey(mapped[i].first, mapped[i].second) }
+            .setNegativeButton("Close", null).show()
+    }
+
+    private fun sendKey(key: String, modifiers: String = "") {
+        thread { send(JSONObject().put("type", "key").put("key", key).put("modifiers", modifiers)) }
+    }
+
+    private fun showControlSettings() {
+        val options = arrayOf("Pointer speed: Slow", "Pointer speed: Normal", "Pointer speed: Fast",
+            "Ctrl + Alt + Delete (not supported)", "Trust connected device", "Device history",
+            "Video quality: Smooth", "Video quality: Balanced", "Video quality: Data saver")
+        android.app.AlertDialog.Builder(this).setTitle("Remote Controls & Settings")
+            .setItems(options) { _, selected ->
+                when (selected) {
+                    0 -> pointerSensitivity = 0.85f
+                    1 -> pointerSensitivity = 1.6f
+                    2 -> pointerSensitivity = 2.8f
+                    3 -> infoDialog("Security", "Windows Ctrl+Alt+Delete requires a privileged Windows service. This preview cannot invoke the secure attention sequence.")
+                    4 -> trustCurrentDevice()
+                    5 -> showDeviceManager()
+                    6 -> sendQuality("smooth")
+                    7 -> sendQuality("balanced")
+                    8 -> sendQuality("data")
+                }
+            }.show()
+    }
+
+    private fun sendQuality(profile: String) {
+        if (!running) { infoDialog("Not connected", "Connect before changing video quality."); return }
+        thread { send(JSONObject().put("type", "quality").put("profile", profile)) }
+        Toast.makeText(this, "Video profile: $profile", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun trustCurrentDevice() {
+        val address = approvedAddress
+        val fingerprint = lastApprovedFingerprint
+        if (address.isBlank() || fingerprint.length != 64 || !running) {
+            infoDialog("Trust device", "Connect successfully first, then explicitly trust this host.")
+            return
+        }
+        android.app.AlertDialog.Builder(this).setTitle("Trust this device?")
+            .setMessage("This remembers the host's entire SHA-256 certificate fingerprint and requires it to match on future connections. Pairing codes and host approval are still required. Only trust devices you control.\n\nFingerprint: $fingerprint")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Trust") { _, _ ->
+                history.trust(address, fingerprint)
+                Toast.makeText(this, "Saved trusted device", Toast.LENGTH_SHORT).show()
+            }.show()
+    }
+
+    private fun showDeviceManager() {
+        val scroll = ScrollView(this)
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(10), dp(8), dp(10))
+            setBackgroundColor(navy)
+        }
+        val devices = history.all()
+        if (devices.isEmpty()) list.addView(textLine("No connections yet. Devices appear after successful pairing.", 14f, true))
+        devices.forEach { item ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = rounded(panelBlue)
+            }
+            card.addView(textLine("▣  " + item.name, 16f))
+            val date = if (item.lastSeen > 0) java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+                .format(java.util.Date(item.lastSeen)) else "Unknown"
+            card.addView(textLine(item.address + "  •  " + date +
+                "  •  " + item.visitCount + " visits" +
+                (if (item.trustedPin.isNotEmpty()) "  •  Trusted" else ""), 11f, true))
+            val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            rowButton(buttons, blueButton("Connect", true) {
+                hostInput.setText(item.address)
+                codeInput.setText("")
+                fingerprintInput.setText(item.trustedPin.take(6))
+                // Fresh host pairing code and explicit approval are required each time.
+                Toast.makeText(this, "Enter the current 6-digit pairing code, then tap Connect.", Toast.LENGTH_LONG).show()
+                devicesDialog?.dismiss()
+                codeInput.requestFocus()
+                Toast.makeText(this, "Enter today's pairing code; host approval is still required.", Toast.LENGTH_LONG).show()
+            })
+            rowButton(buttons, blueButton("Edit") {
+                val edit = field("Device name", item.name)
+                android.app.AlertDialog.Builder(this).setTitle("Rename device")
+                    .setView(edit).setPositiveButton("Save") { _, _ ->
+                        history.rename(item.address, edit.text.toString().ifBlank { item.address })
+                        showDeviceManager()
+                    }.setNegativeButton("Cancel", null).show()
+            })
+            rowButton(buttons, blueButton("Forget") {
+                android.app.AlertDialog.Builder(this).setTitle("Forget device?")
+                    .setMessage("Remove history and the saved trusted fingerprint for " + item.name + "?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Forget") { _, _ ->
+                        history.forget(item.address)
+                        showDeviceManager()
+                    }.show()
+            })
+            card.addView(buttons)
+            list.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+        }
+        scroll.addView(list)
+        devicesDialog?.dismiss()
+        devicesDialog = android.app.AlertDialog.Builder(this).setTitle("Saved Devices & History")
+            .setView(scroll).setPositiveButton("Close", null).create()
+        devicesDialog?.show()
     }
 
     private fun updateModeButtons() {
@@ -512,77 +655,115 @@ class MainActivity : Activity() {
         if (running) return
         val ip = hostInput.text.toString().trim()
         val code = codeInput.text.toString().trim()
-        val pin = fingerprintInput.text.toString().replace(":", "").replace(" ", "").uppercase()
-        if (!code.matches(Regex("[0-9]{6}")) || !pin.matches(Regex("[0-9A-F]{6}"))) {
-            info("Enter the 6-digit code and the 6-character verification code shown on the laptop.")
+        val shortCode = fingerprintInput.text.toString().replace(":", "").replace(" ", "").uppercase()
+        val trusted = history.find(ip)?.trustedPin ?: ""
+        if (ip.isBlank() || !code.matches(Regex("[0-9]{6}")) ||
+            (trusted.isEmpty() && !shortCode.matches(Regex("[0-9A-F]{6}")))) {
+            info("Enter device IP, its current 6-digit pairing code, and 6-character verification code.")
             return
         }
+        stopRequested = false
         running = true
         connectButton.isEnabled = false
         info("Connecting to $ip:48765 ...")
-        thread(name = "remote-viewer") {
-            try {
-                val trustManager = object : X509TrustManager {
-                    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-                    override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                    override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
-                        if (chain.isEmpty()) throw java.security.cert.CertificateException("Missing certificate")
+        thread(name = "az-remote-reconnect") {
+            var failures = 0
+            while (running && !stopRequested && failures < 4) {
+                var wasApproved = false
+                try {
+                    val trustManager = object : X509TrustManager {
+                        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+                        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+                            if (chain.isEmpty()) throw java.security.cert.CertificateException("Missing host certificate")
+                        }
                     }
-                }
-                val context = SSLContext.getInstance("TLS")
-                context.init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
-                val raw = java.net.Socket()
-                raw.connect(InetSocketAddress(ip, 48765), 8000)
-                val ssl = context.socketFactory.createSocket(raw, ip, 48765, true) as SSLSocket
-                socket = ssl
-                ssl.soTimeout = 20000
-                ssl.startHandshake()
-                val certificate = ssl.session.peerCertificates.first() as X509Certificate
-                val actual = MessageDigest.getInstance("SHA-256").digest(certificate.encoded)
-                    .joinToString("") { "%02X".format(it) }
-                if (actual.take(6) != pin) throw SecurityException("Fingerprint mismatch. Connection rejected.")
-                val input = DataInputStream(BufferedInputStream(ssl.inputStream))
-                output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
-                send(JSONObject().put("type", "pair").put("code", code))
-                val approval = read(input)
-                if (approval.optString("type") != "approved") throw IOException("Host rejected or closed the pairing request")
-                ssl.soTimeout = 0
-                info("Connected. Remote screen active.")
-                runOnUiThread { showRemotePage() }
-                while (running) {
-                    val message = read(input)
-                    if (message.optString("type") == "audio") {
-                        if (audioEnabled) {
-                            val sampleRate = message.optInt("sampleRate", 48000)
-                            if (sampleRate in 8000..192000) {
-                                val pcm = android.util.Base64.decode(message.getString("pcm"), android.util.Base64.DEFAULT)
-                                try { playAudio(pcm, sampleRate) }
-                                catch (ex: Exception) { info("Audio unavailable: ${ex.message}") }
+                    val context = SSLContext.getInstance("TLS")
+                    context.init(null, arrayOf<TrustManager>(trustManager), SecureRandom())
+                    val raw = java.net.Socket()
+                    raw.connect(InetSocketAddress(ip, 48765), 8000)
+                    val ssl = context.socketFactory.createSocket(raw, ip, 48765, true) as SSLSocket
+                    socket = ssl
+                    ssl.soTimeout = 30000
+                    ssl.startHandshake()
+                    val cert = ssl.session.peerCertificates.first() as X509Certificate
+                    val actual = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+                        .joinToString("") { "%02X".format(it) }
+                    // Trusted connections always require the entire stored SHA-256 certificate pin.
+                    // New connections use the displayed short code with explicit host approval.
+                    if (trusted.isNotEmpty() && actual != trusted)
+                        throw SecurityException("Trusted certificate changed. Forget and re-pair only if you recognize the host.")
+                    if (trusted.isEmpty() && actual.take(6) != shortCode)
+                        throw SecurityException("Verification code mismatch. Connection rejected.")
+                    val input = DataInputStream(BufferedInputStream(ssl.inputStream))
+                    output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
+                    send(JSONObject().put("type", "pair").put("code", code))
+                    val approval = read(input)
+                    if (approval.optString("type") != "approved")
+                        throw SecurityException("Host denied pairing or approval timed out.")
+                    wasApproved = true
+                    failures = 0
+                    lastApprovedFingerprint = actual
+                    approvedAddress = ip
+                    history.visited(ip)
+                    ssl.soTimeout = 0
+                    info("Connected. Remote screen active.")
+                    runOnUiThread { showRemotePage() }
+                    while (running && !stopRequested) {
+                        val message = read(input)
+                        if (message.optString("type") == "audio") {
+                            if (audioEnabled) {
+                                val sampleRate = message.optInt("sampleRate", 48000)
+                                if (sampleRate in 8000..192000) {
+                                    val pcm = android.util.Base64.decode(message.getString("pcm"), android.util.Base64.DEFAULT)
+                                    try { playAudio(pcm, sampleRate) }
+                                    catch (e: Exception) { info("Audio: " + (e.message ?: "unsupported")) }
+                                }
                             }
-                        }
-                    } else if (message.optString("type") == "frame") {
-                        val bytes = android.util.Base64.decode(message.getString("jpeg"), android.util.Base64.DEFAULT)
-                        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: continue
-                        runOnUiThread {
-                            if (running) {
-                                imageW = bitmap.width; imageH = bitmap.height
-                                screen.setImageBitmap(bitmap)
-                                previewImage.setImageBitmap(bitmap)
-                            } else bitmap.recycle()
+                        } else if (message.optString("type") == "frame") {
+                            if (!imageUiBusy.compareAndSet(false, true)) continue
+                            try {
+                                val bytes = android.util.Base64.decode(message.getString("jpeg"), android.util.Base64.DEFAULT)
+                                val frame = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                if (frame == null) { imageUiBusy.set(false); continue }
+                                runOnUiThread {
+                                    try {
+                                        if (running) {
+                                            imageW = frame.width
+                                            imageH = frame.height
+                                            screen.setImageBitmap(frame)
+                                            previewImage.setImageBitmap(frame)
+                                        } else frame.recycle()
+                                    } finally { imageUiBusy.set(false) }
+                                }
+                            } catch (e: Exception) { imageUiBusy.set(false); throw e }
                         }
                     }
+                } catch (e: SecurityException) {
+                    info("Connection rejected: " + (e.message ?: "authentication failure"))
+                    break // Never auto-retry authentication or host denial.
+                } catch (e: Exception) {
+                    if (stopRequested || !running) break
+                    if (!wasApproved) {
+                        info("Could not connect: " + (e.message ?: e.javaClass.simpleName))
+                        break
+                    }
+                    failures++
+                    if (failures >= 4) { info("Reconnection failed. Open Devices to retry."); break }
+                    val delay = (failures * 2000L).coerceAtMost(8000L)
+                    info("Connection lost. Retrying $failures/3 in ${delay / 1000}s; host approval required.")
+                    try { Thread.sleep(delay) } catch (_: InterruptedException) { break }
+                } finally {
+                    try { socket?.close() } catch (_: Exception) {}
+                    socket = null
+                    output = null
+                    releaseAudio()
                 }
-            } catch (e: Exception) {
-                info("Disconnected: ${e.message ?: e.javaClass.simpleName}")
-            } finally {
-                running = false
-                try { socket?.close() } catch (_: Exception) {}
-                output = null; socket = null
-                releaseAudio()
-                runOnUiThread {
-                    connectButton.isEnabled = true
-                    if (::remotePage.isInitialized) showDashboard()
-                }
+            }
+            running = false
+            runOnUiThread {
+                connectButton.isEnabled = true
+                if (::remotePage.isInitialized) showDashboard()
             }
         }
     }
@@ -601,44 +782,93 @@ class MainActivity : Activity() {
             val bytes = msg.toString().toByteArray(Charsets.UTF_8)
             if (bytes.size > 4096) return
             try { stream.writeInt(bytes.size); stream.write(bytes); stream.flush() }
-            catch (_: IOException) { disconnect() }
+            catch (_: IOException) { try { socket?.close() } catch (_: Exception) {} }
         }
     }
 
+    private fun mouseButton(action: String) {
+        thread { send(JSONObject().put("type", "button").put("button", "left").put("action", action)) }
+    }
+    private fun sendClick(doubleTap: Boolean = false) {
+        thread { send(JSONObject().put("type", "click").put("button", "left").put("count", if (doubleTap) 2 else 1)) }
+    }
     private fun handleTouch(event: MotionEvent): Boolean {
-        if (!running || imageW == 0 || imageH == 0) return false
-        // ImageView.FIT_CENTER letterboxes to preserve the host desktop aspect ratio.
+        if (!running || imageW <= 0 || imageH <= 0) return false
         val scale = min(screen.width.toFloat() / imageW, screen.height.toFloat() / imageH)
         val shownW = imageW * scale
         val shownH = imageH * scale
-        val x = (event.x - (screen.width - shownW) / 2f) / shownW
-        val y = (event.y - (screen.height - shownH) / 2f) / shownH
-        if (x !in 0f..1f || y !in 0f..1f) return true
+        val x = ((event.x - (screen.width - shownW) / 2f) / shownW).coerceIn(0f, 1f)
+        val y = ((event.y - (screen.height - shownH) / 2f) / shownH).coerceIn(0f, 1f)
+        lastX = x
+        lastY = y
+
         if (touchpadMode) {
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { previousX = event.x; previousY = event.y; moved = false; downTime = System.currentTimeMillis() }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = event.x - previousX
-                    val dy = event.y - previousY
+                MotionEvent.ACTION_DOWN -> {
                     previousX = event.x; previousY = event.y
-                    if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 2) moved = true
-                    thread { send(JSONObject().put("type", "relative").put("dx", (dx * 1.5).toDouble()).put("dy", (dy * 1.5).toDouble())) }
+                    downTime = System.currentTimeMillis()
+                    moved = false; heldPointer = false; gestureTwoFingers = false
                 }
-                MotionEvent.ACTION_UP -> if (!moved && System.currentTimeMillis() - downTime < 450) {
-                    thread { send(JSONObject().put("type", "click").put("button", "left")) }
+                MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount >= 2) {
+                    gestureTwoFingers = true
+                    previousTwoFingerY = (event.getY(0) + event.getY(1)) / 2f
+                    if (heldPointer) { mouseButton("up"); heldPointer = false }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (gestureTwoFingers && event.pointerCount >= 2) {
+                        val mid = (event.getY(0) + event.getY(1)) / 2f
+                        val delta = (previousTwoFingerY - mid) * 3
+                        previousTwoFingerY = mid
+                        if (kotlin.math.abs(delta) >= 3) {
+                            thread { send(JSONObject().put("type", "scroll")
+                                .put("delta", delta.toInt().coerceIn(-360, 360))) }
+                        }
+                    } else if (!gestureTwoFingers) {
+                        val dx = event.x - previousX
+                        val dy = event.y - previousY
+                        previousX = event.x; previousY = event.y
+                        // Holding a stationary finger enables drag-and-drop.
+                        if (!moved && !heldPointer && System.currentTimeMillis() - downTime > 480)
+                            { heldPointer = true; mouseButton("down") }
+                        if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > 3) moved = true
+                        if (dx != 0f || dy != 0f) {
+                            val sensitivity = pointerSensitivity
+                            thread { send(JSONObject().put("type", "relative")
+                                .put("dx", (dx * sensitivity).toDouble())
+                                .put("dy", (dy * sensitivity).toDouble())) }
+                        }
+                    }
+                }
+                MotionEvent.ACTION_POINTER_UP -> gestureTwoFingers = true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (heldPointer) { mouseButton("up"); heldPointer = false }
+                    else if (!gestureTwoFingers && !moved &&
+                        event.actionMasked == MotionEvent.ACTION_UP &&
+                        System.currentTimeMillis() - downTime < 480) {
+                        val now = System.currentTimeMillis()
+                        sendClick(now - lastTapAt < 320)
+                        lastTapAt = now
+                    }
+                    gestureTwoFingers = false
                 }
             }
             return true
         }
-        lastX = x
-        lastY = y
-        val action = when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> "down"
-            MotionEvent.ACTION_MOVE -> "move"
-            MotionEvent.ACTION_UP -> "up"
-            else -> return true
+        // Screen-touch mode: absolute click location and hold-to-drag.
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                thread { send(JSONObject().put("type", "mouse").put("x", x.toDouble())
+                    .put("y", y.toDouble()).put("action", "down")) }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                thread { send(JSONObject().put("type", "mouse").put("x", x.toDouble())
+                    .put("y", y.toDouble()).put("action", "move")) }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                thread { send(JSONObject().put("type", "mouse").put("x", x.toDouble())
+                    .put("y", y.toDouble()).put("action", "up")) }
+            }
         }
-        thread { send(JSONObject().put("type", "mouse").put("x", x.toDouble()).put("y", y.toDouble()).put("action", action)) }
         return true
     }
 
@@ -686,6 +916,7 @@ class MainActivity : Activity() {
     }
 
     private fun disconnect() {
+        stopRequested = true
         running = false
         try { socket?.close() } catch (_: Exception) {}
         info("Disconnected")
