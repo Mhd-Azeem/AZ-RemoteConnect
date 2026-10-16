@@ -352,6 +352,8 @@ class MainActivity : Activity() {
         remotePage.addView(bottom, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         rootLayout.addView(remotePage, LinearLayout.LayoutParams(-1, -1))
         setContentView(rootLayout)
+        updateModeButtons()
+        updateAudioButton()
         if (Build.VERSION.SDK_INT >= 35) {
             window.decorView.setOnApplyWindowInsetsListener { _, insets ->
                 val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
