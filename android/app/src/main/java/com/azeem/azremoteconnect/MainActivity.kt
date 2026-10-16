@@ -405,7 +405,7 @@ class MainActivity : Activity() {
 
     private fun showControlSettings() {
         val options = arrayOf("Pointer speed: Slow", "Pointer speed: Normal", "Pointer speed: Fast",
-            "Ctrl + Alt + Delete (not supported)", "Device identity info", "Device history",
+            "Ctrl + Alt + Delete (not supported)", "Device history",
             "Video quality: Smooth", "Video quality: Balanced", "Video quality: Data saver")
         android.app.AlertDialog.Builder(this).setTitle("Remote Controls & Settings")
             .setItems(options) { _, selected ->
@@ -414,11 +414,10 @@ class MainActivity : Activity() {
                     1 -> pointerSensitivity = 1.6f
                     2 -> pointerSensitivity = 2.8f
                     3 -> infoDialog("Security", "Windows Ctrl+Alt+Delete requires a privileged Windows service. This preview cannot invoke the secure attention sequence.")
-                    4 -> trustCurrentDevice()
-                    5 -> showDeviceManager()
-                    6 -> sendQuality("smooth")
-                    7 -> sendQuality("balanced")
-                    8 -> sendQuality("data")
+                    4 -> showDeviceManager()
+                    5 -> sendQuality("smooth")
+                    6 -> sendQuality("balanced")
+                    7 -> sendQuality("data")
                 }
             }.show()
     }
@@ -427,22 +426,6 @@ class MainActivity : Activity() {
         if (!running) { infoDialog("Not connected", "Connect before changing video quality."); return }
         thread { send(JSONObject().put("type", "quality").put("profile", profile)) }
         Toast.makeText(this, "Video profile: $profile", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun trustCurrentDevice() {
-        val address = approvedAddress
-        val fingerprint = lastApprovedFingerprint
-        if (address.isBlank() || fingerprint.length != 64 || !running) {
-            infoDialog("Trust device", "Connect successfully first, then explicitly trust this host.")
-            return
-        }
-        android.app.AlertDialog.Builder(this).setTitle("Trust this device?")
-            .setMessage("The app remembers the complete host identity after the first approved pairing. A changed identity is rejected on future sessions. Host approval and a current pairing code remain required.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Trust") { _, _ ->
-                history.trust(address, fingerprint)
-                Toast.makeText(this, "Saved trusted device", Toast.LENGTH_SHORT).show()
-            }.show()
     }
 
     private fun showDeviceManager() {
