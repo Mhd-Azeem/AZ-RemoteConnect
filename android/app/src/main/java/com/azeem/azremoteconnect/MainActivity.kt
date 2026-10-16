@@ -539,27 +539,37 @@ class MainActivity : Activity() {
         val service = AndroidHostService
         if (!service.active) {
             return "Phone host not ready • " + service.hostStatus +
-                if (service.hostError.isBlank()) "" else "\\n" + service.hostError
+                if (service.hostError.isBlank()) "" else "\n" + service.hostError
         }
-        val lanIp = try {
+        val grouped = mutableListOf<String>()
+        var carrierCount = 0
+        try {
             val all = java.net.NetworkInterface.getNetworkInterfaces()
-            val found = mutableListOf<String>()
             while (all.hasMoreElements()) {
                 val adapter = all.nextElement()
                 if (!adapter.isUp || adapter.isLoopback) continue
-                val ipAddresses = adapter.inetAddresses
-                while (ipAddresses.hasMoreElements()) {
-                    val address = ipAddresses.nextElement()
-                    if (address is java.net.Inet4Address && !address.isLoopbackAddress)
-                        found.add(address.hostAddress ?: "")
+                val name = adapter.name.lowercase(java.util.Locale.ROOT)
+                val isCarrier = name.startsWith("rmnet") || name.startsWith("ccmni") ||
+                    name.startsWith("pdp") || name.startsWith("v4-rmnet")
+                val addresses = adapter.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val address = addresses.nextElement()
+                    if (address is java.net.Inet4Address && !address.isLoopbackAddress) {
+                        if (isCarrier) carrierCount++
+                        else grouped.add("$name: " + address.hostAddress)
+                    }
                 }
             }
-            found.distinct().joinToString(", ")
-        } catch (_: Exception) { "check your hotspot gateway IP" }
-        return "READY • Phone IP: $lanIp • Port: 48765\\n" +
-            "Temporary 6-digit pairing code: " + service.code +
-            "\\n" + (if (service.activeClient) "Connected to a viewer" else "Waiting for host approval request") +
-            if (service.hostError.isBlank()) "" else "\\nLast session error: " + service.hostError
+        } catch (_: Exception) { }
+        val ipInfo = if (grouped.isNotEmpty()) grouped.distinct().joinToString(" • ")
+            else "No local Wi-Fi/hotspot interface detected"
+        val warning = if (grouped.isEmpty() && carrierCount > 0)
+            "\nMobile carrier IPs are not usable as a hotspot host address. On the connected laptop, check ipconfig for its Default Gateway. Use that gateway as the phone IP."
+            else "\nUse an IP from the same Wi-Fi/hotspot network as the controlling device."
+        return "READY • Host address: $ipInfo • TCP 48765\n" +
+            "Temporary pairing code: " + service.code +
+            "\n" + (if (service.activeClient) "Viewer connected" else "Waiting for an approved viewer") +
+            warning + (if (service.hostError.isBlank()) "" else "\nLast connection problem: " + service.hostError)
     }
 
     private fun showScreenShareDisclosure() {
