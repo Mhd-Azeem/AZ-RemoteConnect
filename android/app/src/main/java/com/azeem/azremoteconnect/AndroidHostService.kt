@@ -49,6 +49,7 @@ class AndroidHostService : Service() {
     private var frameHeight = 0
     private var pointerX = 0.5f
     private var pointerY = 0.5f
+    private val rejectedPairs = java.util.concurrent.atomic.AtomicInteger(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -167,7 +168,8 @@ class AndroidHostService : Service() {
                 val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                 val output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                 val pair = read(input)
-                if (pair.optString("type") != "pair" || pair.optString("code") != code) {
+                if (rejectedPairs.get() >= 10 || pair.optString("type") != "pair" || pair.optString("code") != code) {
+                    rejectedPairs.incrementAndGet()
                     send(output, JSONObject().put("type", "error").put("message", "Incorrect pairing code"))
                     return
                 }
@@ -205,6 +207,7 @@ class AndroidHostService : Service() {
                                     pointerY = (pointerY + command.optDouble("dy", 0.0).toFloat() / frameHeight).coerceIn(0f, 1f)
                                 }
                                 "click" -> service.click(frameWidth * pointerX, frameHeight * pointerY)
+                                "text" -> service.replaceFocusedText(command.optString("value").take(200))
                             }
                         }
                     } catch (_: Exception) { try { ssl.close() } catch (_: Exception) {} }
@@ -244,6 +247,7 @@ class AndroidHostService : Service() {
     }
     override fun onDestroy() {
         active = false; accepting.set(false)
+        code = ""
         touchAllowedForSession = false
         try { server?.close() } catch (_: Exception) {}
         display?.release(); reader?.close(); projection?.stop()

@@ -1,1 +1,248 @@
-<Window x:Class="AZRemoteConnect.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="AZ RemoteConnect — LAN Preview" Height="670" Width="1040" MinHeight="500" MinWidth="760" Background="#091B36"><Grid Margin="20"><Grid.ColumnDefinitions><ColumnDefinition Width="315"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Grid.Column="0" Margin="0,0,18,0"><TextBlock Text="AZ RemoteConnect" Foreground="White" FontWeight="Bold" FontSize="25"/><TextBlock Text="Secure blue remote desktop" Foreground="#91A2BE" Margin="0,3,0,18"/><TextBlock Text="HOST THIS COMPUTER" Foreground="White" FontWeight="Bold"/><Button x:Name="StartHost" Content="Start hosting" Click="StartHost_Click" Margin="0,8,0,10" Height="38"/><TextBlock x:Name="HostDetails" Foreground="#E0E7F2" TextWrapping="Wrap" Margin="0,0,0,20"/><TextBlock Text="CONNECT TO COMPUTER" Foreground="White" FontWeight="Bold"/><TextBlock Text="Host IP / DNS" Foreground="#AEC0D6" Margin="0,10,0,3"/><TextBox x:Name="RemoteHost" Text="127.0.0.1" Height="30"/><TextBlock Text="Port" Foreground="#AEC0D6" Margin="0,8,0,3"/><TextBox x:Name="RemotePort" Text="48765" Height="30"/><TextBlock Text="6-digit pairing code" Foreground="#AEC0D6" Margin="0,8,0,3"/><TextBox x:Name="RemoteCode" Height="30"/><TextBlock Text="6-character verification code (or full fingerprint)" Foreground="#AEC0D6" Margin="0,8,0,3"/><TextBox x:Name="RemoteFingerprint" Height="30"/><Button x:Name="Connect" Content="Connect" Click="Connect_Click" Height="38" Margin="0,12,0,8"/><Button Content="Disconnect / Stop" Click="Stop_Click" Height="32"/><TextBlock x:Name="Status" Text="Not connected" Foreground="#AEC0D6" TextWrapping="Wrap" Margin="0,20,0,0"/><TextBlock Text="For trusted LANs only. Both sides must exchange code and verification securely. The host must approve the session." Foreground="#91A2BE" TextWrapping="Wrap" Margin="0,20,0,0"/></StackPanel><Border Grid.Column="1" BorderBrush="#2879C8" BorderThickness="1" Background="#071323"><Grid><Image x:Name="ScreenView" Stretch="Uniform" MouseMove="ScreenView_MouseMove" MouseDown="ScreenView_MouseDown" MouseUp="ScreenView_MouseUp"/><TextBlock x:Name="EmptyScreen" Text="Remote screen will appear here" Foreground="#9CAAC0" HorizontalAlignment="Center" VerticalAlignment="Center"/></Grid></Border></Grid></Window>
+<Window x:Class="AZRemoteConnect.MainWindow"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+ xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+ xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+ Title="AZ RemoteConnect" Width="1450" Height="860" MinWidth="1050" MinHeight="670"
+ Background="#030B21" WindowStyle="None" ResizeMode="CanResize" FontFamily="Segoe UI" Foreground="#F1F6FF">
+ <shell:WindowChrome.WindowChrome>
+  <shell:WindowChrome CaptionHeight="0" ResizeBorderThickness="8" GlassFrameThickness="0" CornerRadius="16"/>
+ </shell:WindowChrome.WindowChrome>
+ <Window.Resources>
+  <SolidColorBrush x:Key="Panel" Color="#072650"/>
+  <SolidColorBrush x:Key="CardBg" Color="#092B60"/>
+  <SolidColorBrush x:Key="Edge" Color="#1678DE"/>
+  <LinearGradientBrush x:Key="TopGradient" StartPoint="0,0" EndPoint="1,1">
+   <GradientStop Color="#03132F" Offset="0"/><GradientStop Color="#0C59B6" Offset=".52"/><GradientStop Color="#021331" Offset="1"/>
+  </LinearGradientBrush>
+  <LinearGradientBrush x:Key="AccentGradient" StartPoint="0,0" EndPoint="1,1">
+   <GradientStop Color="#12B4FF" Offset="0"/><GradientStop Color="#0670F5" Offset=".54"/><GradientStop Color="#0145D6" Offset="1"/>
+  </LinearGradientBrush>
+  <Style x:Key="BlueButton" TargetType="Button">
+   <Setter Property="Foreground" Value="#F5F9FF"/><Setter Property="FontWeight" Value="SemiBold"/>
+   <Setter Property="FontSize" Value="14"/><Setter Property="Cursor" Value="Hand"/>
+   <Setter Property="Padding" Value="12,10"/><Setter Property="BorderThickness" Value="0"/>
+   <Setter Property="Background" Value="#0A3770"/>
+   <Setter Property="Template">
+    <Setter.Value><ControlTemplate TargetType="Button">
+     <Border x:Name="ButtonBorder" CornerRadius="12" BorderBrush="#218EEA" BorderThickness="1"
+      Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+      <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+     </Border>
+     <ControlTemplate.Triggers>
+      <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#68D9FF"/><Setter TargetName="ButtonBorder" Property="Opacity" Value=".91"/></Trigger>
+      <Trigger Property="IsEnabled" Value="False"><Setter TargetName="ButtonBorder" Property="Opacity" Value=".43"/></Trigger>
+     </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value>
+   </Setter>
+  </Style>
+  <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource BlueButton}">
+   <Setter Property="Background" Value="{StaticResource AccentGradient}"/>
+  </Style>
+  <Style x:Key="NavButton" TargetType="Button" BasedOn="{StaticResource BlueButton}">
+   <Setter Property="BorderThickness" Value="0"/><Setter Property="Background" Value="Transparent"/>
+   <Setter Property="HorizontalContentAlignment" Value="Left"/><Setter Property="FontWeight" Value="Normal"/>
+   <Setter Property="FontSize" Value="16"/><Setter Property="Padding" Value="19,14"/>
+   <Setter Property="Margin" Value="5,5,5,1"/>
+  </Style>
+  <Style x:Key="Field" TargetType="TextBox">
+   <Setter Property="Background" Value="#071938"/><Setter Property="Foreground" Value="#F1F7FF"/>
+   <Setter Property="BorderBrush" Value="#247CD1"/><Setter Property="BorderThickness" Value="1"/>
+   <Setter Property="Padding" Value="10,7"/><Setter Property="CaretBrush" Value="#61D9FF"/>
+   <Setter Property="FontSize" Value="14"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+  </Style>
+  <Style x:Key="SmallLabel" TargetType="TextBlock">
+   <Setter Property="Foreground" Value="#9EBCE7"/><Setter Property="FontSize" Value="12"/>
+  </Style>
+ </Window.Resources>
+ <Border BorderThickness="1" BorderBrush="#159BFF" CornerRadius="20" Margin="6" Background="#041C3B" ClipToBounds="True">
+  <Grid>
+   <Grid.RowDefinitions><RowDefinition Height="88"/><RowDefinition Height="*"/><RowDefinition Height="43"/></Grid.RowDefinitions>
+   <!-- Header -->
+   <Border Grid.Row="0" Background="{StaticResource TopGradient}" BorderBrush="#11528C" BorderThickness="0,0,0,1"
+    MouseLeftButtonDown="Header_MouseLeftButtonDown">
+    <Grid Margin="20,0,14,0">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+      <Border Width="59" Height="59" CornerRadius="13" Background="#032653" BorderBrush="#1576D7" BorderThickness="1">
+       <Image Source="/azremoteconnect-logo.png" Stretch="UniformToFill"/>
+      </Border>
+      <StackPanel Margin="16,0,0,0" VerticalAlignment="Center">
+       <TextBlock Text="AZ Remote Connect" FontSize="23" FontWeight="Bold"/>
+       <TextBlock Text="Your devices, within reach" FontSize="13" Foreground="#C0D6F9" Margin="0,3,0,0"/>
+      </StackPanel>
+     </StackPanel>
+     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+      <Button Content="⚙" ToolTip="Settings" Click="Settings_Click" Style="{StaticResource NavButton}" Margin="2" FontSize="20" Width="48" Height="44"/>
+      <Button Content="—" ToolTip="Minimize" Click="Minimize_Click" Style="{StaticResource NavButton}" Margin="2" Width="44" Height="44"/>
+      <Button Content="▢" ToolTip="Maximize" Click="Maximize_Click" Style="{StaticResource NavButton}" Margin="2" Width="44" Height="44"/>
+      <Button Content="✕" ToolTip="Close" Click="Close_Click" Style="{StaticResource NavButton}" Margin="2" Width="44" Height="44"/>
+     </StackPanel>
+    </Grid>
+   </Border>
+   <!-- Navigation and working dashboard -->
+   <Grid Grid.Row="1">
+    <Grid.ColumnDefinitions><ColumnDefinition Width="236"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+    <Border Background="#051B38" BorderThickness="0,0,1,0" BorderBrush="#175286">
+     <StackPanel Margin="11,18,10,0">
+      <Button Tag="Dashboard" Content="⌂   Dashboard" Style="{StaticResource PrimaryButton}" Click="Nav_Click" Margin="2,2,2,11" Height="55" FontSize="17"/>
+      <Button Tag="Devices" Content="▣   Devices" Style="{StaticResource NavButton}" Click="Nav_Click"/>
+      <Button Tag="Screen Share" Content="▤   Screen Share" Style="{StaticResource NavButton}" Click="Nav_Click"/>
+      <Button Tag="Audio" Content="◖))  Audio" Style="{StaticResource NavButton}" Click="Nav_Click"/>
+      <Button Tag="Files" Content="▱   Files" Style="{StaticResource NavButton}" Click="Nav_Click"/>
+      <Button Tag="Settings" Content="⚙   Settings" Style="{StaticResource NavButton}" Click="Nav_Click"/>
+      <Border Background="#092B51" BorderBrush="#195488" BorderThickness="1" CornerRadius="14" Margin="4,34,4,0" Padding="13">
+       <StackPanel>
+        <TextBlock Text="LOCAL CONNECTION" Foreground="#56CDFF" FontWeight="Bold" FontSize="11"/>
+        <TextBlock Text="Same Wi-Fi or hotspot" Foreground="#D6E7FF" Margin="0,9,0,0" FontSize="12"/>
+        <TextBlock Text="Port 48765 • Host approval" TextWrapping="Wrap" Foreground="#8FACD6" Margin="0,3,0,0" FontSize="11"/>
+        <TextBlock Text="Remote internet access needs a VPN." TextWrapping="Wrap" Foreground="#8FACD6" Margin="0,10,0,0" FontSize="11"/>
+       </StackPanel>
+      </Border>
+     </StackPanel>
+    </Border>
+    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Background="#041D40">
+     <Grid Margin="20,18,16,18">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+      <StackPanel Grid.Row="0" Margin="5,0,0,16">
+       <TextBlock x:Name="PageTitle" Text="Remote Access Dashboard" FontSize="31" FontWeight="Bold"/>
+       <TextBlock x:Name="PageSubtitle" Text="Connect to an Android phone and control it from your computer." FontSize="15" Foreground="#C5D9FA" Margin="0,4,0,0"/>
+      </StackPanel>
+      <Grid Grid.Row="1">
+       <Grid.ColumnDefinitions><ColumnDefinition Width="2.18*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+       <StackPanel Grid.Column="0" Margin="0,0,14,0">
+        <!-- Device and temporary code card -->
+        <Border CornerRadius="18" BorderThickness="1" BorderBrush="#128AFA" Background="#092F66" Padding="19" MinHeight="238">
+         <StackPanel>
+          <Grid>
+           <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+           <Border Width="54" Height="70" CornerRadius="12" BorderBrush="#3CC1FF" BorderThickness="2" Background="#041F48">
+            <TextBlock Text="▣" FontSize="36" Foreground="#47C7FF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+           </Border>
+           <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
+            <TextBlock Text="TARGET DEVICE" FontSize="11" Foreground="#9DBDE4" FontWeight="Bold"/>
+            <TextBlock x:Name="RemoteDeviceTitle" Text="Connect your Android phone" FontSize="21" FontWeight="Bold" Margin="0,3,0,0"/>
+            <TextBlock x:Name="RemoteDeviceAddress" Text="Not connected" Foreground="#B3CAEF" FontSize="12" Margin="0,5,0,0"/>
+           </StackPanel>
+           <Border Grid.Column="2" VerticalAlignment="Top" Background="#123D6B" BorderBrush="#3983D7" BorderThickness="1" CornerRadius="12" Padding="11,6">
+            <TextBlock x:Name="ConnectionStatus" Text="●  Disconnected" Foreground="#B3CAEF" FontSize="12"/>
+           </Border>
+          </Grid>
+          <Grid Margin="0,14,0,0">
+           <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="175"/></Grid.ColumnDefinitions>
+           <StackPanel Margin="0,0,12,0">
+            <TextBlock Text="PHONE IP ADDRESS" Style="{StaticResource SmallLabel}"/>
+            <TextBox x:Name="RemoteHost" Text="192.168.1.2" Style="{StaticResource Field}" Margin="0,5,0,8"/>
+            <TextBlock Text="Only devices on your trusted LAN / VPN" Foreground="#A6C0E8" FontSize="11" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+             <TextBlock Text="Port" Foreground="#92B9E6" VerticalAlignment="Center" Margin="0,0,8,0"/>
+             <TextBox x:Name="RemotePort" Text="48765" Style="{StaticResource Field}" Width="89" Height="32" FontSize="12"/>
+            </StackPanel>
+           </StackPanel>
+           <StackPanel Grid.Column="1">
+            <TextBlock Text="TEMPORARY PAIRING CODE" Style="{StaticResource SmallLabel}" FontWeight="Bold"/>
+            <TextBox x:Name="RemoteCode" MaxLength="6" FontSize="24" FontWeight="Bold" CharacterCasing="Upper"
+             TextAlignment="Center" Style="{StaticResource Field}" Height="52" Margin="0,5,0,3"/>
+            <TextBlock Text="Enter the 6 digits shown on your phone" Foreground="#A8C7EA" FontSize="11" TextWrapping="Wrap"/>
+           </StackPanel>
+          </Grid>
+          <StackPanel Orientation="Horizontal" Margin="0,15,0,0">
+           <Button x:Name="Connect" Content="⛓   Connect to Phone" Click="Connect_Click" Style="{StaticResource PrimaryButton}" Padding="17,10" Margin="0,0,8,0"/>
+           <Button Content="Disconnect" Click="Disconnect_Click" Style="{StaticResource BlueButton}" Padding="17,10"/>
+          </StackPanel>
+         </StackPanel>
+        </Border>
+        <TextBlock Text="Remote Control Features" FontSize="19" FontWeight="SemiBold" Margin="8,18,0,12"/>
+        <!-- feature cards -->
+        <UniformGrid Columns="2">
+         <Button x:Name="ScreenTouchButton" Click="TouchMode_Click" Style="{StaticResource PrimaryButton}" MinHeight="112" Margin="0,0,8,10">
+          <StackPanel HorizontalAlignment="Left">
+           <TextBlock Text="☝  Screen Touch" FontSize="17" FontWeight="Bold"/>
+           <TextBlock Text="Click and interact directly in preview" TextWrapping="Wrap" MaxWidth="280" FontSize="12" Foreground="#E1F0FF" Margin="0,8,0,0"/>
+          </StackPanel>
+         </Button>
+         <Button x:Name="TouchpadButton" Click="TouchpadMode_Click" Style="{StaticResource BlueButton}" MinHeight="112" Margin="0,0,0,10">
+          <StackPanel HorizontalAlignment="Left">
+           <TextBlock Text="▣  Touchpad Mode" FontSize="17" FontWeight="Bold"/>
+           <TextBlock Text="Drag on preview to move the pointer" TextWrapping="Wrap" MaxWidth="280" Foreground="#B6D8FF" FontSize="12" Margin="0,8,0,0"/>
+          </StackPanel>
+         </Button>
+         <Button Click="RemoteAudio_Click" Style="{StaticResource BlueButton}" MinHeight="107" Margin="0,0,8,0">
+          <StackPanel HorizontalAlignment="Left">
+           <TextBlock Text="♫  Audio Streaming" FontSize="17" FontWeight="Bold"/>
+           <TextBlock Text="Android → PC audio not supported yet" TextWrapping="Wrap" MaxWidth="260" Foreground="#B6D8FF" FontSize="12" Margin="0,8,0,0"/>
+          </StackPanel>
+         </Button>
+         <Button Click="FileTransfer_Click" Style="{StaticResource BlueButton}" MinHeight="107">
+          <StackPanel HorizontalAlignment="Left">
+           <TextBlock Text="▤  File Transfer" FontSize="17" FontWeight="Bold"/>
+           <TextBlock Text="File transfer is planned, not enabled" TextWrapping="Wrap" MaxWidth="260" Foreground="#B6D8FF" FontSize="12" Margin="0,8,0,0"/>
+          </StackPanel>
+         </Button>
+        </UniformGrid>
+        <TextBlock Text="Quick Controls" FontSize="18" FontWeight="SemiBold" Margin="8,18,0,10"/>
+        <UniformGrid Columns="4">
+         <Button Content="⛶  Full Screen" Click="FullScreen_Click" Style="{StaticResource BlueButton}" Margin="0,0,7,0"/>
+         <Button Content="⛓  Disconnect" Click="Disconnect_Click" Style="{StaticResource BlueButton}" Margin="0,0,7,0" Foreground="#FF96A6"/>
+         <Button Content="◖  PC Audio" Click="MutePcAudio_Click" Style="{StaticResource BlueButton}" Margin="0,0,7,0"/>
+         <Button Content="⌨  Keyboard" Click="SendKeyboard_Click" Style="{StaticResource BlueButton}"/>
+        </UniformGrid>
+        <Border BorderBrush="#19598F" BorderThickness="1" Background="#06244C" Padding="12" CornerRadius="12" Margin="0,17,0,0">
+         <StackPanel>
+          <TextBlock Text="HOST THIS COMPUTER" Foreground="#69D4FF" FontSize="12" FontWeight="Bold"/>
+          <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
+           <Button Content="Start PC sharing" x:Name="StartHost" Click="StartHost_Click" Style="{StaticResource BlueButton}" Margin="0,0,8,0"/>
+           <Button Content="Copy code" Click="CopyCode_Click" Style="{StaticResource BlueButton}" Margin="0,0,8,0"/>
+           <Button Content="Forget phone trust" Click="TrustReset_Click" Style="{StaticResource BlueButton}"/>
+          </StackPanel>
+          <TextBlock x:Name="HostDetails" Text="PC hosting is off. Each session uses a new six-digit pairing code." Foreground="#B4D2F2" FontSize="12" TextWrapping="Wrap"/>
+         </StackPanel>
+        </Border>
+       </StackPanel>
+       <!-- actual phone preview -->
+       <Border Grid.Column="1" CornerRadius="18" Background="#07254C" BorderThickness="1" BorderBrush="#137EF5" Padding="12">
+        <Grid>
+         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+         <Grid Grid.Row="0" Margin="0,0,0,15">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+          <TextBlock Text="▣   Phone Screen Preview" FontSize="15" FontWeight="Bold" VerticalAlignment="Center"/>
+          <Button Grid.Column="1" Click="FullScreen_Click" Content="⛶" ToolTip="Expand phone preview" Style="{StaticResource BlueButton}" Padding="10,5"/>
+         </Grid>
+         <Grid Grid.Row="1" HorizontalAlignment="Center" VerticalAlignment="Center" MinHeight="395">
+          <Border CornerRadius="32" BorderThickness="6" BorderBrush="#071120" Background="#00070E" Width="260" Height="478">
+           <Border BorderThickness="2" BorderBrush="#346DAE" CornerRadius="27" Margin="2" ClipToBounds="True">
+            <Grid Background="#04142D">
+             <Image x:Name="ScreenView" Stretch="Uniform"
+               MouseMove="ScreenView_MouseMove" MouseDown="ScreenView_MouseDown" MouseUp="ScreenView_MouseUp"
+               MouseWheel="ScreenView_MouseWheel" Focusable="True"/>
+             <StackPanel x:Name="EmptyScreen" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="215">
+              <TextBlock Text="▣" Foreground="#23ADFB" HorizontalAlignment="Center" FontSize="54"/>
+              <TextBlock Text="Connect a phone to display its screen here" Foreground="#C7DFFF" FontSize="14"
+               TextAlignment="Center" TextWrapping="Wrap" Margin="0,12,0,0"/>
+              <TextBlock Text="No sample or simulated screen" FontSize="11" Foreground="#7DA2CB"
+               TextAlignment="Center" Margin="0,10,0,0"/>
+             </StackPanel>
+            </Grid>
+           </Border>
+          </Border>
+         </Grid>
+         <TextBlock Grid.Row="2" x:Name="PreviewHint" Text="Awaiting approved host connection" FontSize="11"
+             Foreground="#8EB8E6" TextAlignment="Center" TextWrapping="Wrap" Margin="0,10,0,0"/>
+        </Grid>
+       </Border>
+      </Grid>
+      <TextBlock Grid.Row="2" Margin="6,15,0,0" Text="Security: six-digit pairing + explicit host approval • TLS trust remembered on first use. Do not expose this port to the public internet."
+        Foreground="#8AB5E4" FontSize="11" TextWrapping="Wrap"/>
+     </Grid>
+    </ScrollViewer>
+   </Grid>
+   <!-- Status footer -->
+   <Border Grid.Row="2" Background="#06162D" BorderBrush="#194D80" BorderThickness="0,1,0,0">
+    <Grid Margin="15,0">
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <TextBlock x:Name="Status" Text="●  Disconnected  |  Use your Android phone's IP and six-digit code" Foreground="#B9D4F5" VerticalAlignment="Center" FontSize="12" TextTrimming="CharacterEllipsis"/>
+     <TextBlock Grid.Column="1" Text="◈  Approved sessions only" Foreground="#80B6F0" VerticalAlignment="Center" FontSize="12"/>
+    </Grid>
+   </Border>
+  </Grid>
+ </Border>
+</Window>
