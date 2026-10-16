@@ -199,6 +199,8 @@ class AndroidHostService : Service() {
             accepting.set(false)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                 .notify(42, notice("Host failed • open app and tap Refresh code"))
+            // Failed TLS or socket setup must not leave MediaProjection capturing in the background.
+            Handler(Looper.getMainLooper()).post { stopSelf() }
         }
     }
     private fun handle(client: SSLSocket) {
