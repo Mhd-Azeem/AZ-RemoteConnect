@@ -255,6 +255,7 @@ class AndroidHostService : Service() {
                 stage = "Screen capture streaming"
                 send(output, JSONObject().put("type", "approved"))
                 activeClient = true
+                hostError = ""
                 hostStatus = "Approved • streaming to remote viewer"
                 Thread({
                     try {
@@ -296,7 +297,8 @@ class AndroidHostService : Service() {
                         "Check that both devices use the latest release, share a reachable Wi-Fi/hotspot " +
                         "or private VPN address, and that TCP 48765 is not blocked. " +
                         "See the controlling device's error details."
-                    hostStatus = hostError
+                    // A failed incoming negotiation does not stop the listener.
+                    hostStatus = "Ready for incoming connections on port 48765"
                     android.util.Log.w("AZRemoteHost", "TLS negotiation aborted by remote peer", e)
                 } else failure(stage, e)
             } finally {

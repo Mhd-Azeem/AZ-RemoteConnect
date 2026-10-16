@@ -566,10 +566,15 @@ class MainActivity : Activity() {
         val warning = if (grouped.isEmpty() && carrierCount > 0)
             "\nMobile carrier IPs are not usable as a hotspot host address. On the connected laptop, check ipconfig for its Default Gateway. Use that gateway as the phone IP."
             else "\nUse an IP from the same Wi-Fi/hotspot network as the controlling device."
+        val verification = if (service.verification.length == 6) service.verification
+            else "Preparing certificate; tap Refresh in a moment"
         return "READY • Host address: $ipInfo • TCP 48765\n" +
-            "Temporary pairing code: " + service.code +
-            "\n" + (if (service.activeClient) "Viewer connected" else "Waiting for an approved viewer") +
-            warning + (if (service.hostError.isBlank()) "" else "\nLast connection problem: " + service.hostError)
+            "Pairing code: " + service.code + "\n" +
+            "Verification code: " + verification + "\n" +
+            (if (service.activeClient) "● Connected to an approved viewer" else "● Waiting for a viewer") +
+            warning + (if (service.hostError.isBlank()) "" else
+                "\nPrevious connection attempt: " + service.hostError +
+                "\nHost is still READY. Check the controlling device's error message.")
     }
 
     private fun showScreenShareDisclosure() {
