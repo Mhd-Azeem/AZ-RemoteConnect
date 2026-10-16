@@ -113,7 +113,7 @@ public partial class MainWindow : Window
 
     private void ExplainSettings()
     {
-        ShowInformation("Connection security", "Enter only the six-digit temporary code shown by the Android host. On first contact, AZ RemoteConnect asks you to trust the device's TLS identity. That full identity is remembered in your Windows profile and a later certificate change is blocked.\n\nIMPORTANT: The first connection is trust-on-first-use, which can be intercepted on a hostile network. The code is not a cryptographic replacement for strong peer verification. Use a trusted hotspot or VPN; never forward port 48765 onto the public internet.\n\nTo remove a saved identity, use 'Forget phone trust'.");
+        ShowInformation("Connection security", "Connect on the same trusted Wi-Fi or hotspot with the host IP and its current six-digit pairing code. The host must approve every incoming session. TLS encryption remains enabled, and after an approved first pairing the full host identity is remembered automatically. If that identity later changes, the connection is blocked until you intentionally forget the saved host. No extra verification code is required. Do not forward port 48765 to the public internet.");
     }
 
     private void ShowInformation(string title, string message) =>
@@ -131,7 +131,8 @@ public partial class MainWindow : Window
                 return decision;
             });
             host.Start();
-            HostDetails.Text = "Temporary six-digit code: " + host.PairCode + "\nPort 48765 • Your approval is required. Android viewer builds that still request certificate verification: " + host.VerificationCode;
+            HostDetails.Text = "Temporary six-digit pairing code: " + host.PairCode +
+                "\nPort 48765 • The other device needs only your Wi-Fi IP and this code. You must approve each session.";
             SetStatus("Hosting PC screen. Waiting for an approved peer.");
         }
         catch (Exception ex)
@@ -219,16 +220,9 @@ public partial class MainWindow : Window
                 }, token);
 
             if (seenPin == null) throw new AuthenticationException("Host did not present a TLS identity.");
-            connectionPhase = "First-time trust";
-            if (trustedPin == null)
-            {
-                var choice = System.Windows.MessageBox.Show(this,
-                    "This is the first connection to " + connectedHostKey + ".\n\n" +
-                    "There is no saved device identity yet. If the address is untrusted, someone on the network could impersonate your phone and capture the six-digit code.\n\n" +
-                    "Only continue on your trusted hotspot or private VPN. Once your phone approves the connection, its TLS identity will be remembered and future changes blocked.\n\nTrust this device for a first connection?",
-                    "First connection — verify your network", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (choice != MessageBoxResult.Yes) throw new AuthenticationException("You declined to trust the first connection.");
-            }
+            // First-use identity is remembered automatically only after the
+            // phone accepts the six-digit pairing request. On later connections,
+            // the full certificate fingerprint must match the saved identity.
             connectionPhase = "Pairing and phone approval";
             SetStatus("Secure channel opened. Waiting for phone approval...");
             await RemoteTransport.SendAsync(viewer, new { type = "pair", code }, token);

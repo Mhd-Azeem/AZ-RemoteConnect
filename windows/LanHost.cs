@@ -52,7 +52,13 @@ internal sealed class LanHost : IAsyncDisposable
                 using var tls = new SslStream(client.GetStream(), false);
                 await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions { ServerCertificate = certificate, EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13 });
                 using var hello = await RemoteTransport.ReadAsync(tls, stop.Token);
-                if (RemoteTransport.Field(hello, "type") != "pair" || !CryptographicOperations.FixedTimeEquals(System.Text.Encoding.UTF8.GetBytes(RemoteTransport.Field(hello,"code").PadRight(6).Substring(0,6)), System.Text.Encoding.UTF8.GetBytes(PairCode))) return;
+                var submittedCode = RemoteTransport.Field(hello, "code");
+                if (RemoteTransport.Field(hello, "type") != "pair" ||
+                    submittedCode.Length != 6 ||
+                    !System.Text.RegularExpressions.Regex.IsMatch(submittedCode, "^[0-9]{6}$") ||
+                    !CryptographicOperations.FixedTimeEquals(
+                        System.Text.Encoding.ASCII.GetBytes(submittedCode),
+                        System.Text.Encoding.ASCII.GetBytes(PairCode))) return;
                 if (!await approve()) return;
                 await RemoteTransport.SendAsync(tls, new { type = "approved" }, stop.Token);
                 using var sessionStop = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);

@@ -37,7 +37,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : Activity() {
     private lateinit var hostInput: EditText
     private lateinit var codeInput: EditText
-    private lateinit var fingerprintInput: EditText
     private lateinit var status: TextView
     private lateinit var screen: ImageView
     private lateinit var connectButton: Button
@@ -172,7 +171,7 @@ class MainActivity : Activity() {
         brand.addView(textLine("Control your PC, from anywhere on your trusted network", 11f, true))
         header.addView(brand, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(blueButton("⚙") {
-            infoDialog("Settings and privacy", "Remote sessions require a pairing code and host approval. The six-character verification prefix is not suitable for untrusted networks. Use a trusted VPN for remote connections. Screen-sharing and remote-touch consent remain separate.")
+            infoDialog("Settings and privacy", "Enter the host IP and its temporary six-digit code on the same trusted Wi-Fi/hotspot. The connection is encrypted, host consent is required, and approved device identity is remembered automatically. Do not expose TCP 48765 to the public internet.")
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         dashboardPage.addView(header)
         addSpace(dashboardPage, 15)
@@ -194,8 +193,7 @@ class MainActivity : Activity() {
         addSpace(deviceCard, 7)
         hostInput = field("Laptop or phone IP address", "192.168.1.2")
         codeInput = field("6-digit pairing code")
-        fingerprintInput = field("6-character verification code")
-        for (input in listOf(hostInput, codeInput, fingerprintInput)) {
+        for (input in listOf(hostInput, codeInput)) {
             val lp = LinearLayout.LayoutParams(-1, dp(48))
             lp.setMargins(0, dp(4), 0, dp(4))
             deviceCard.addView(input, lp)
@@ -242,7 +240,7 @@ class MainActivity : Activity() {
         previewFrame.addView(overlay, FrameLayout.LayoutParams(-1, dp(33), Gravity.BOTTOM))
         previewFrame.setOnClickListener {
             if (running) showRemotePage()
-            else infoDialog("Not connected", "Enter the host IP, pairing code, and verification code, then tap Connect.")
+            else infoDialog("Not connected", "Enter the host IP and the current six-digit pairing code, then tap Connect.")
         }
         val previewLp = LinearLayout.LayoutParams(-1, dp(160))
         previewLp.topMargin = dp(9)
@@ -407,7 +405,7 @@ class MainActivity : Activity() {
 
     private fun showControlSettings() {
         val options = arrayOf("Pointer speed: Slow", "Pointer speed: Normal", "Pointer speed: Fast",
-            "Ctrl + Alt + Delete (not supported)", "Trust connected device", "Device history",
+            "Ctrl + Alt + Delete (not supported)", "Device history",
             "Video quality: Smooth", "Video quality: Balanced", "Video quality: Data saver")
         android.app.AlertDialog.Builder(this).setTitle("Remote Controls & Settings")
             .setItems(options) { _, selected ->
@@ -416,11 +414,10 @@ class MainActivity : Activity() {
                     1 -> pointerSensitivity = 1.6f
                     2 -> pointerSensitivity = 2.8f
                     3 -> infoDialog("Security", "Windows Ctrl+Alt+Delete requires a privileged Windows service. This preview cannot invoke the secure attention sequence.")
-                    4 -> trustCurrentDevice()
-                    5 -> showDeviceManager()
-                    6 -> sendQuality("smooth")
-                    7 -> sendQuality("balanced")
-                    8 -> sendQuality("data")
+                    4 -> showDeviceManager()
+                    5 -> sendQuality("smooth")
+                    6 -> sendQuality("balanced")
+                    7 -> sendQuality("data")
                 }
             }.show()
     }
@@ -429,22 +426,6 @@ class MainActivity : Activity() {
         if (!running) { infoDialog("Not connected", "Connect before changing video quality."); return }
         thread { send(JSONObject().put("type", "quality").put("profile", profile)) }
         Toast.makeText(this, "Video profile: $profile", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun trustCurrentDevice() {
-        val address = approvedAddress
-        val fingerprint = lastApprovedFingerprint
-        if (address.isBlank() || fingerprint.length != 64 || !running) {
-            infoDialog("Trust device", "Connect successfully first, then explicitly trust this host.")
-            return
-        }
-        android.app.AlertDialog.Builder(this).setTitle("Trust this device?")
-            .setMessage("This remembers the host's entire SHA-256 certificate fingerprint and requires it to match on future connections. Pairing codes and host approval are still required. Only trust devices you control.\n\nFingerprint: $fingerprint")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Trust") { _, _ ->
-                history.trust(address, fingerprint)
-                Toast.makeText(this, "Saved trusted device", Toast.LENGTH_SHORT).show()
-            }.show()
     }
 
     private fun showDeviceManager() {
@@ -472,7 +453,6 @@ class MainActivity : Activity() {
             rowButton(buttons, blueButton("Connect", true) {
                 hostInput.setText(item.address)
                 codeInput.setText("")
-                fingerprintInput.setText(item.trustedPin.take(6))
                 // Fresh host pairing code and explicit approval are required each time.
                 Toast.makeText(this, "Enter the current 6-digit pairing code, then tap Connect.", Toast.LENGTH_LONG).show()
                 devicesDialog?.dismiss()
@@ -566,11 +546,8 @@ class MainActivity : Activity() {
         val warning = if (grouped.isEmpty() && carrierCount > 0)
             "\nMobile carrier IPs are not usable as a hotspot host address. On the connected laptop, check ipconfig for its Default Gateway. Use that gateway as the phone IP."
             else "\nUse an IP from the same Wi-Fi/hotspot network as the controlling device."
-        val verification = if (service.verification.length == 6) service.verification
-            else "Preparing certificate; tap Refresh in a moment"
         return "READY • Host address: $ipInfo • TCP 48765\n" +
             "Pairing code: " + service.code + "\n" +
-            "Verification code: " + verification + "\n" +
             (if (service.activeClient) "● Connected to an approved viewer" else "● Waiting for a viewer") +
             warning + (if (service.hostError.isBlank()) "" else
                 "\nPrevious connection attempt: " + service.hostError +
@@ -670,11 +647,9 @@ class MainActivity : Activity() {
         if (running) return
         val ip = hostInput.text.toString().trim()
         val code = codeInput.text.toString().trim()
-        val shortCode = fingerprintInput.text.toString().replace(":", "").replace(" ", "").uppercase()
         val trusted = history.find(ip)?.trustedPin ?: ""
-        if (ip.isBlank() || !code.matches(Regex("[0-9]{6}")) ||
-            (trusted.isEmpty() && !shortCode.matches(Regex("[0-9A-F]{6}")))) {
-            info("Enter device IP, its current 6-digit pairing code, and 6-character verification code.")
+        if (ip.isBlank() || !code.matches(Regex("[0-9]{6}"))) {
+            info("Enter device IP and its current 6-digit pairing code.")
             return
         }
         stopRequested = false
@@ -704,12 +679,11 @@ class MainActivity : Activity() {
                     val cert = ssl.session.peerCertificates.first() as X509Certificate
                     val actual = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
                         .joinToString("") { "%02X".format(it) }
-                    // Trusted connections always require the entire stored SHA-256 certificate pin.
-                    // New connections use the displayed short code with explicit host approval.
+                    // Pairing on trusted Wi-Fi uses the temporary host code and host approval.
+                    // After first approved pairing, pin the entire certificate automatically.
+                    // Subsequent connections reject a changed host identity.
                     if (trusted.isNotEmpty() && actual != trusted)
                         throw SecurityException("Trusted certificate changed. Forget and re-pair only if you recognize the host.")
-                    if (trusted.isEmpty() && actual.take(6) != shortCode)
-                        throw SecurityException("Verification code mismatch. Connection rejected.")
                     val input = DataInputStream(BufferedInputStream(ssl.inputStream))
                     output = DataOutputStream(BufferedOutputStream(ssl.outputStream))
                     send(JSONObject().put("type", "pair").put("code", code))
@@ -721,6 +695,7 @@ class MainActivity : Activity() {
                     lastApprovedFingerprint = actual
                     approvedAddress = ip
                     history.visited(ip)
+                    if (trusted.isEmpty()) history.trust(ip, actual)
                     ssl.soTimeout = 0
                     info("Connected. Remote screen active.")
                     runOnUiThread { showRemotePage() }
