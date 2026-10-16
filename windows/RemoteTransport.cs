@@ -1,6 +1,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Linq;
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
@@ -34,15 +35,32 @@ internal static class RemoteTransport
         return JsonDocument.Parse(bytes);
     }
     public static string Field(JsonDocument obj, string field) => obj.RootElement.TryGetProperty(field, out var v) ? v.ToString() : "";
+    // The first prototype generated a new certificate at every launch, breaking trusted
+    // device reconnections. Persist a non-exportable private key in the Windows user store.
+    // The certificate expires after three years, when the user must explicitly re-trust it.
     public static X509Certificate2 MakeCertificate()
     {
+        const string subject = "CN=AZRemoteConnect-Host-v2";
+        using var store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+        store.Open(OpenFlags.ReadWrite);
+        var previous = store.Certificates
+            .Find(X509FindType.FindBySubjectDistinguishedName, subject, false)
+            .OfType<X509Certificate2>()
+            .FirstOrDefault(cert => cert.HasPrivateKey && cert.NotAfter > DateTime.UtcNow.AddDays(30));
+        if (previous != null) return new X509Certificate2(previous);
+
         using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
-        var request = new CertificateRequest("CN=AZRemoteConnect-Temporary", key, HashAlgorithmName.SHA256);
+        var request = new CertificateRequest(subject, key, HashAlgorithmName.SHA256);
         request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
         request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
-        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false));
-        using var generated = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddDays(1));
-        return new X509Certificate2(generated.Export(X509ContentType.Pfx));
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+            new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false));
+        using var generated = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddYears(3));
+        using var imported = new X509Certificate2(generated.Export(X509ContentType.Pfx),
+            (string?)null, X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.PersistKeySet);
+        store.Add(imported);
+        return new X509Certificate2(imported);
     }
     public static string Fingerprint(X509Certificate cert) => Convert.ToHexString(SHA256.HashData(cert.GetRawCertData()));
 }
