@@ -281,9 +281,9 @@ class MainActivity : Activity() {
         dashboardPage.addView(hostCard)
 
         val scroll = ScrollView(this).apply {
-            fillViewport = false
+            isFillViewport = false
             isVerticalScrollBarEnabled = false
-            addView(dashboardPage, ScrollView.LayoutParams(-1, -2))
+            addView(dashboardPage, FrameLayout.LayoutParams(-1, -2))
         }
         val homeShell = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         homeShell.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
