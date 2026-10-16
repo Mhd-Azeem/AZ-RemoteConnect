@@ -431,7 +431,7 @@ public partial class MainWindow : Window
             }
         };
         var panel = (StackPanel)dialog.Content;
-        var send = new Button { Content = "Send text", HorizontalAlignment = HorizontalAlignment.Right, Width = 110, Height = 30, Margin = new Thickness(0, 0, 14, 0) };
+        var send = new Button { Content = "Send text", HorizontalAlignment = System.Windows.HorizontalAlignment.Right, Width = 110, Height = 30, Margin = new Thickness(0, 0, 14, 0) };
         panel.Children.Add(send);
         send.Click += (_, _) => { dialog.DialogResult = true; };
         if (dialog.ShowDialog() == true && field.Text.Length is > 0 and <= 200)
